@@ -14,13 +14,26 @@ it("drops only the confirmed trailing diagnostic across every read boundary, kee
   expect([...output].map((byte) => tail.push(byte)).join("") + tail.flush(true)).toBe("pane output" + teardown);
 });
 
-it("preserves ordinary pane output, incomplete diagnostics and diagnostics without a takeover exit", () => {
+it("preserves ordinary pane output, and diagnostics the attach did not exit after", () => {
   for (const output of [diagnostic, teardown + diagnostic + "more output", teardown + "herdr: another error", teardown + diagnostic, teardown + diagnostic + "\n".repeat(1000)]) {
     const tail = new AttachOutputTail();
     expect(tail.push(output) + tail.flush()).toBe(output);
   }
+  // after the words, more of the pane's own screen: they were the pane's
   const tail = new AttachOutputTail();
-  expect(tail.push(teardown + "herdr: server shut down: term") + tail.flush(true)).toBe(teardown + "herdr: server shut down: term");
+  expect(tail.push(teardown + "herdr: x\x1b[2Jscreen") + tail.flush(true)).toBe(teardown + "herdr: x\x1b[2Jscreen");
+  const long = teardown + "herdr: " + "x".repeat(600);
+  expect(tail.push(long) + tail.flush(true)).toBe(long);
+});
+
+it("drops any of herdr's last words at the attach's exit: a pane closed, a server shut down", () => {
+  for (const words of ["herdr: server shut down: terminal attach ended: terminal term_65ed6a3251b702f not found\r\n", "herdr: server shut down\r\n", "herdr: lost connection to server: broken pipe"]) {
+    const output = "$ exit" + teardown + words;
+    for (let cut = 1; cut < output.length; cut++) {
+      const tail = new AttachOutputTail();
+      expect(tail.push(output.slice(0, cut)) + tail.push(output.slice(cut)) + tail.flush(true)).toBe("$ exit" + teardown);
+    }
+  }
 });
 
 // the bridge's own test: setup is mode switches and cursor styles, maybe cut short (server/index.ts)
