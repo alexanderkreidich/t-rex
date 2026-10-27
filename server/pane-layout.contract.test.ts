@@ -291,3 +291,33 @@ describe("pane layout routes: herdr's layout changes", () => {
     expect((await layout()).panes.map((pane) => pane.pane_id).sort()).toEqual([root, right, below, nested].sort());
   });
 });
+
+describe("pane layout routes: every client hears of the change", () => {
+  it("pushes session-changed when a split answers, not after herdr's event and the collector's debounce", async () => {
+    const own = await workspaceCreate({ cwd: tmpdir(), label: "t-rex-test-layout-push" });
+    const socket = new WebSocket(`ws://localhost:${server.port}/ws`);
+    const frames: { type: string; at: number }[] = [];
+    socket.addEventListener("message", (event) => frames.push({ ...(JSON.parse(String(event.data)) as { type: string }), at: performance.now() }));
+    /** herdr and the bridge are other processes: a bounded poll, never a fixed sleep */
+    const until = async (check: () => boolean, label: string): Promise<void> => {
+      const deadline = Date.now() + 5_000;
+      while (!check() && Date.now() < deadline) await Bun.sleep(10);
+      if (!check()) throw new Error(`Timed out: ${label}: ${JSON.stringify(frames.map((frame) => frame.type))}`);
+    };
+    try {
+      // the creation's own frame, debounced, is not the split's
+      await until(() => frames.some((frame) => frame.type === "session-changed"), "session-changed after the workspace's creation");
+      const seen = frames.length;
+      // no focus asked, as a split by key or from the palette: no pane.focused event says it either
+      const response = await post("split", { pane_id: own.root_pane.pane_id, direction: "right" });
+      const answered = performance.now();
+      expect(response.status).toBe(200);
+      await until(() => frames.slice(seen).some((frame) => frame.type === "session-changed"), "session-changed after the split");
+      // herdr's own event and the collector's half-second debounce took 525–735 ms
+      expect(frames.slice(seen).find((frame) => frame.type === "session-changed")!.at - answered).toBeLessThan(250);
+    } finally {
+      socket.close();
+      await workspaceClose(own.workspace.workspace_id).catch(() => undefined);
+    }
+  }, 20_000);
+});
