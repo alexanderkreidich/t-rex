@@ -268,9 +268,9 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       const probes = new AttachStartupProbes();
       const outputTail = new AttachOutputTail();
       let tailTimer: ReturnType<typeof setTimeout> | undefined;
-      const flushTail = (taken = false): void => {
+      const flushTail = (exited = false): void => {
         clearTimeout(tailTimer);
-        const data = outputTail.flush(taken);
+        const data = outputTail.flush(exited);
         if (data) forward(data);
       };
       const publish = (data: string): void => {
@@ -367,7 +367,8 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
         takingOver = null;
         trying = true; // a live-handoff lookup owns the next start until it finishes
         release();
-        flushTail();
+        // herdr's last words (a pane closed, a server shut down) are not the pane's screen
+        flushTail(true);
         const finish = (): void => {
           broadcast(paneId, { type: "pty-exit", pane_id: paneId, code });
           closeAttachment(paneId);
