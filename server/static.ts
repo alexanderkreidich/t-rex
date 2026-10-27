@@ -1,0 +1,234 @@
+/**
+ * Serves the built client out of dist/.
+ *
+ * Cache-Control is decided per file on purpose: Vite fingerprints everything under
+ * /assets/, so those are safe to pin for a year, while the service worker, the web
+ * manifest and the index.html shell must revalidate on every load - a cached sw.js
+ * or shell pins the installed PWA to a build the user can no longer get rid of.
+ */
+
+import type { BunFile } from "bun";
+import { existsSync } from "node:fs";
+import { join, normalize } from "node:path";
+
+// A URL's pathname is not a file path: on Windows it is `/C:/...`, and spaces come percent-encoded.
+const DIST_DIR = join(import.meta.dir, "..", "dist");
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".md": "text/plain; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+};
+
+/** Files whose URL never changes but whose contents decide what the app becomes. */
+const REVALIDATED_PATHS = new Set(["/sw.js", "/manifest.webmanifest"]);
+
+const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";
+const SHORT_CACHE = "public, max-age=86400";
+const REVALIDATE = "no-cache";
+
+function contentTypeFor(path: string): string {
+  const dot = path.lastIndexOf(".");
+  if (dot === -1) return "application/octet-stream";
+  return MIME[path.slice(dot)] ?? "application/octet-stream";
+}
+
+function cacheControlFor(pathname: string): string {
+  if (REVALIDATED_PATHS.has(pathname)) return REVALIDATE;
+  if (pathname.startsWith("/assets/")) return IMMUTABLE_CACHE;
+  return SHORT_CACHE;
+}
+
+/**
+ * The app's own Content-Security-Policy, sent with the shell and every static file. Every
+ * directive is here for a reason, and none of them is a guess:
+ *
+ * - `default-src 'self'`: the fallback for anything not named below. Nothing is fetched
+ *   from another host: the API, the terminal socket, the machines event stream, the
+ *   fonts (bundled woff2, `src/fonts/`), the PC bundle and the push endpoints are all
+ *   same-origin, and the remote PCs are reached through this server's own /api/machines
+ *   proxy rather than from the browser.
+ * - `script-src 'self' 'wasm-unsafe-eval'`: both entry points are Vite modules (index.html),
+ *   nothing in the app evaluates a string, and there is no inline handler attribute. This is
+ *   the directive that matters: the agent marks are the one place that puts third-party
+ *   markup into the page. 'wasm-unsafe-eval' lets the terminal compile its
+ *   WebAssembly core (restty's libghostty-vt, bundled in the app's own script); it allows no
+ *   JavaScript evaluation.
+ * - `style-src 'self' 'unsafe-inline'`: inline style attributes are how measured layout
+ *   reaches the DOM (AgentPicker, RowMenu). The terminal's box takes its measured size the
+ *   same way. The unsafe part is styles, not script.
+ * - `img-src 'self' data: blob:`: same-origin icons and pane images;
+ *   `blob:` for a pasted image previewed before it is uploaded; `data:` for the inline
+ *   agent marks.
+ * - `font-src 'self' data:`: every face is bundled through Vite (the terminal
+ *   fetches its own as bytes, under connect-src). No font CDN. The `data:` is Vite's own
+ *   inlining: an asset under ~4 KB is emitted as a data: URL inside the CSS rather than as a
+ *   file. That data: is app-bundled bytes, never anything an agent or a pane can reach.
+ * - `connect-src 'self'`: every fetch is a relative /api path, the terminal socket is
+ *   window.location.host over ws:/wss: (which 'self' matches — confirmed in Chromium:
+ *   an explicit `new WebSocket("ws://<same host>/ws")` and the machines event stream both
+ *   connect under the enforcing header).
+ * - `media-src 'none'` and `frame-src 'none'`: the app plays no media and frames no page.
+ * - `worker-src 'self'`: the service worker is /sw.js, same-origin.
+ * - `object-src 'none'`: no <object>/<embed> in the app, and none may appear.
+ * - `base-uri 'self'`: no <base>, and a tag that adds one changes what every relative URL
+ *   in the page means.
+ * - `form-action 'self'`: every form is submitted by script, but a form that ever grows
+ *   an action must not post this PC's credentials somewhere else.
+ * - `frame-ancestors 'none'`: nothing frames the app itself.
+ */
+const CSP_DIRECTIVES = [
+  "default-src 'self'",
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "media-src 'none'",
+  "frame-src 'none'",
+  "worker-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+];
+
+/**
+ * The policy both headers carry. A browser script that serves a build of its own sends it as it is:
+ * serveStatic reads only this checkout's dist/, and sends no policy before that is built.
+ */
+export const CONTENT_SECURITY_POLICY = CSP_DIRECTIVES.join("; ");
+
+/**
+ * HERDR_WEB_CSP=report-only measures the policy above without enforcing it: the browser
+ *   logs what the policy would have blocked and the app keeps working. `report-only` is the
+ *   measurement mode; anything else enforces.
+ */
+function cspHeader(): Record<string, string> {
+  return process.env["HERDR_WEB_CSP"] === "report-only"
+    ? { "content-security-policy-report-only": CONTENT_SECURITY_POLICY }
+    : { "content-security-policy": CONTENT_SECURITY_POLICY };
+}
+
+/**
+ * HERDR_WEB_APP_NAME names the installed app. Each PC is its own origin, so two PCs installed
+ * on one phone are two apps, and both would be called "herdr" (#476). Unset or blank, every
+ * file is served as built. Read on every request, like HERDR_WEB_CSP; the manifest and the
+ * shell revalidate on every load, so an installed app learns a new name without a reinstall.
+ */
+export function appName(): string | null {
+  const name = process.env["HERDR_WEB_APP_NAME"]?.trim();
+  return name ? name : null;
+}
+
+/** The manifest under another name: `short_name` is the home-screen label, `name` the rest. */
+export function renameManifest(manifest: string, name: string): string {
+  return JSON.stringify({ ...JSON.parse(manifest), name, short_name: name }, null, 2);
+}
+
+/**
+ * The manifest with the app's own absolute id as a related application. Chromium's
+ * getInstalledRelatedApps() matches `platform: "webapp"` entries by absolute id only, so a tab
+ * in the browser can find the installed copy of the same origin. The origin differs per PC and
+ * per proxy, so it is added per request, never written into public/manifest.webmanifest.
+ */
+export function relateManifest(text: string, origin: string): string {
+  return JSON.stringify({ ...JSON.parse(text), related_applications: [{ platform: "webapp", id: `${origin}/` }] }, null, 2);
+}
+
+/** What /manifest.webmanifest answers: renamed under HERDR_WEB_APP_NAME, then related to its origin. */
+export function manifestBody(text: string, origin: string): string {
+  const name = appName();
+  return relateManifest(name ? renameManifest(text, name) : text, origin);
+}
+
+/**
+ * The origin a browser used to reach this request: the scheme from X-Forwarded-Proto when a
+ * proxy states one (http or https), else the request URL's, and the host from the Host header.
+ */
+export function requestOrigin(request: Request): string {
+  const url = new URL(request.url);
+  const forwarded = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  const scheme = forwarded === "http" || forwarded === "https" ? forwarded : url.protocol.slice(0, -1);
+  return `${scheme}://${request.headers.get("host") ?? url.host}`;
+}
+
+const APPLE_TITLE = /(<meta name="apple-mobile-web-app-title" content=")[^"]*(")/;
+
+/** The shell under another name: an iOS home-screen install takes its label from this meta. */
+export function renameShell(html: string, name: string): string {
+  const content = name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return html.replace(APPLE_TITLE, (_, start: string, end: string) => `${start}${content}${end}`);
+}
+
+/** The file as built, or the manifest and the shell under HERDR_WEB_APP_NAME. */
+async function body(file: BunFile, kind: "manifest" | "shell" | null, origin?: string): Promise<BunFile | string> {
+  if (kind === "manifest" && origin !== undefined) return manifestBody(await file.text(), origin);
+  const name = appName();
+  if (!name || !kind) return file;
+  return kind === "manifest" ? renameManifest(await file.text(), name) : renameShell(await file.text(), name);
+}
+
+/** Accepted representations, with a server preference for br over gzip on ties.
+ * An implicit identity is the fallback; explicit identity quality participates. */
+function encodings(header: string | null | undefined): Array<"br" | "gzip" | "identity"> {
+  if (!header?.trim()) return ["identity"];
+  const weights = new Map<string, number>();
+  for (const item of header.split(",")) {
+    const match = /^\s*([\w*-]+)\s*(?:;\s*q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?))?\s*$/i.exec(item);
+    // x-gzip is gzip's older name (RFC 9110 §8.4.1.3): one weight for both
+    if (match) weights.set(match[1]!.toLowerCase().replace(/^x-gzip$/, "gzip"), match[2] === undefined ? 1 : Number(match[2]));
+  }
+  const weight = (coding: string): number => weights.get(coding) ?? (coding === "identity" ? (weights.get("*") === 0 ? 0 : 0.001) : weights.get("*") ?? 0);
+  return (["br", "gzip", "identity"] as const).filter(coding => weight(coding) > 0).sort((a, b) => weight(b) - weight(a));
+}
+
+/** `origin` is what requestOrigin answers; a caller that has no request (a QA script) may leave it out. */
+export async function serveStatic(pathname: string, acceptEncoding?: string | null, origin?: string): Promise<Response> {
+  const indexPath = join(DIST_DIR, "index.html");
+  if (!existsSync(indexPath)) {
+    return new Response(
+      "T-Rex server is running, but the browser client has not been built yet.\nRun: bun run build\n",
+      { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
+    );
+  }
+  const relative = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
+  const candidate = join(DIST_DIR, relative);
+  if (candidate.startsWith(DIST_DIR) && relative !== "/" && existsSync(candidate)) {
+    const file = Bun.file(candidate);
+    if ((await file.exists()) && !(await file.stat()).isDirectory()) {
+      // Only immutable JS/CSS get build-time sidecars. Never compress user/API
+      // data, the service worker, or the shell on a request's hot path.
+      if (pathname.startsWith("/assets/") && /\.(?:js|css)$/.test(pathname)) {
+        for (const encoding of encodings(acceptEncoding)) {
+          const body = encoding === "identity" ? file : Bun.file(`${candidate}.${encoding === "br" ? "br" : "gz"}`);
+          if (!await body.exists()) continue;
+          return new Response(body, { headers: { "content-type": contentTypeFor(candidate), "cache-control": IMMUTABLE_CACHE,
+            vary: "Accept-Encoding", ...cspHeader(), ...(encoding === "identity" ? {} : { "content-encoding": encoding }) } });
+        }
+        return new Response(null, { status: 406, headers: { vary: "Accept-Encoding", ...cspHeader() } });
+      }
+      const kind = pathname === "/manifest.webmanifest" ? "manifest" : candidate === indexPath ? "shell" : null;
+      return new Response(await body(file, kind, origin), {
+        headers: { "content-type": contentTypeFor(candidate), "cache-control": cacheControlFor(pathname), ...cspHeader() },
+      });
+    }
+  }
+  // a missing file is not a page: the shell under a bundle's URL fails as a script anyway, and a
+  // service worker would keep it there. An old tab asks for its own build's chunks after an update.
+  if (pathname.startsWith("/assets/") || pathname.startsWith("/icons/")) {
+    return new Response(null, { status: 404, headers: { "cache-control": REVALIDATE, ...cspHeader() } });
+  }
+  return new Response(await body(Bun.file(indexPath), "shell"), {
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": REVALIDATE, ...cspHeader() },
+  });
+}

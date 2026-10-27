@@ -1,0 +1,56 @@
+{
+  "name": "t-rex",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Your herdr sessions in a Ghostty-like terminal, in the browser and on your phone. Built like Superlogical's Rex, on the herdr multiplexer and restty.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexanderkreidich/t-rex.git"
+  },
+  "scripts": {
+    "postinstall": "bun scripts/build-restty.ts",
+    "dev": "bun --bun vite",
+    "build": "bun --bun vite build",
+    "server": "bun run server/index.ts",
+    "sandbox": "bun run scripts/sandbox.ts",
+    "start": "bun run build && bun run server/managed.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
+    "check": "bun scripts/check.ts",
+    "test": "bun test",
+    "test:unit": "bun scripts/ci-tests.ts unit",
+    "test:integration": "bun scripts/ci-tests.ts integration",
+    "test:restty": "bun run build && bun run check run bash scripts/restty-browser.sh",
+    "test:kitty": "bun run check run --build bun scripts/kitty-graphics-regression.ts",
+    "test:ui": "bun run build && bun scripts/ui-regression.ts && bun scripts/ui-contexts-regression.ts && bun scripts/sticky-modifiers-regression.ts",
+    "generate:types": "bun run scripts/generate-protocol-types.ts",
+    "generate:themes": "bun run scripts/generate-themes.ts",
+    "build:remote": "bun run scripts/build-remote-bundle.ts",
+    "build:mac": "bun run scripts/build-mac-app.ts",
+    "test:ssh": "bun run scripts/ssh-integration.ts"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.1.0",
+    "lucide-react": "^1.47.0",
+    "qrcode-generator": "^2.0.4",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "restty": "github:alexanderkreidich/restty#f4f1556c2702815a469fdeb1e1b239881faea2a0",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/react-test-renderer": "^19.1.0",
+    "@types/web-push": "^3.6.4",
+    "@vitejs/plugin-react": "^6.1.2",
+    "playwright-core": "^1.49.1",
+    "react-test-renderer": "19.3.0",
+    "typescript": "^7.0.2",
+    "typescript-api": "npm:typescript@^6.0.3",
+    "vite": "^8.3.4"
+  },
+  "packageManager": "bun@1.4.2"
+}

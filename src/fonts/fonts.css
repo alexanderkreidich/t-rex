@@ -1,0 +1,29 @@
+/*
+ * The app's own typefaces (THIRD_PARTY_NOTICES.md), served from the user's PC: nothing here is
+ * fetched from another host.
+ *
+ * Pretendard Variable is upstream's dynamic subset, 92 chunks told apart by unicode-range in the
+ * stylesheet imported below (copied whole from the package): the browser fetches only the chunks
+ * whose characters a page draws: the demo's English chat takes three (90 KB) and the same
+ * chat in Korean eight more (200 KB). Vite fingerprints each into /assets/, where the service worker keeps what was fetched.
+ */
+@import "./pretendard/pretendardvariable-dynamic-subset.css";
+
+/* JetBrains Mono, the face of the whole interface (--font-ui and --font-mono in styles.css): the
+   variable upright and italic, every weight from 100 to 800 in one file each. The family name is
+   the app's own so it never stands in for a font a user names. The terminal loads its JetBrains
+   Mono faces itself, as bytes (lib/restty/fonts.ts). */
+@font-face {
+  font-family: "JetBrains Mono Web";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("./JetBrainsMono-Variable.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono Web";
+  font-style: italic;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("./JetBrainsMono-Italic-Variable.woff2") format("woff2");
+}

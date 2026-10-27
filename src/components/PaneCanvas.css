@@ -1,0 +1,159 @@
+.pane-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--term-bg);
+}
+
+.pane-frame {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: var(--hairline) solid var(--border-strong);
+  background: var(--term-bg);
+  outline: none;
+  overflow: hidden;
+}
+
+.pane-frame.is-current { border-color: var(--accent); }
+.pane-frame.is-hidden { visibility: hidden; pointer-events: none; }
+.pane-frame.is-single { border: 0; }
+.pane-frame-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h);
+  padding-inline: var(--space-2);
+  color: var(--text-dim);
+  background: var(--term-bg);
+  font-size: var(--fs-xs);
+}
+.pane-frame.is-current .pane-frame-head { color: var(--accent); }
+.pane-frame-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.pane-frame-menu { flex: none; width: var(--control-h); height: var(--control-h); pointer-events: auto; }
+.pane-frame-body { flex: 1; min-width: 0; min-height: 0; position: relative; }
+/* A lone pane's head floats over the terminal's top right corner, where a full-screen program may
+   draw a control of its own (Claude Code's diff panel close): only its ellipsis takes a press */
+.pane-frame.is-single > .pane-frame-head { position: absolute; right: 0; top: 0; z-index: var(--z-banner); background: transparent; pointer-events: none; }
+.pane-frame.is-single .pane-frame-title { display: none; }
+/* A mouse uses right-click; keyboard users reveal the ellipsis by tabbing to it. A screen that
+   also takes touch keeps it, since a finger has no right-click there. */
+@media (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  .pane-frame-menu { opacity: 0; pointer-events: none; }
+  .pane-frame-menu:focus-visible { opacity: 1; pointer-events: auto; }
+}
+/* A phone draws a pane's title bar as its ellipsis alone: the mark, the folder and the actions are
+   the desktop card's (below) */
+.pane-frame-mark,
+.pane-frame-folder,
+.pane-frame-actions { display: none; }
+@media (max-width: 768px) {
+  /* Single-pane chrome must not cover the search controls. */
+  .pane-frame.is-single:has(.find-bar) > .pane-frame-head { display: none; }
+  /* the tab strip's touch menu carries the open pane's actions: a lone pane draws no second ellipsis */
+  .pane-column:has(.tab-strip-menu) .pane-frame.is-single > .pane-frame-head { display: none; }
+}
+.pane-divider {
+  position: absolute;
+  z-index: var(--z-banner);
+  touch-action: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.pane-divider.is-vertical { width: 8px; transform: translateX(-4px); cursor: col-resize; }
+.pane-divider.is-horizontal { height: 8px; transform: translateY(-4px); cursor: row-resize; }
+.pane-divider:focus-visible { outline: var(--ring); background: var(--accent-tint); }
+.pane-canvas-error { position: absolute; z-index: var(--z-modal); top: var(--space-2); right: var(--space-2); max-width: min(30rem, 90%); padding: var(--space-2); background: var(--bg-elevated); color: var(--status-blocked); border: var(--hairline) solid var(--border); }
+.pane-rename-form { display: flex; flex-direction: column; gap: var(--space-3); }
+@media (pointer: coarse) {
+  .pane-frame-head { height: var(--touch-target); }
+  .pane-frame-menu { min-width: var(--touch-target); height: var(--touch-target); }
+}
+
+.pane-canvas.is-pending { pointer-events: none; }
+
+/* From 769px each pane is a card on the window's surface, the gap between them (Ghostty's splits,
+   Zed's panes): a title bar on top says what runs in it and where, with the pane's actions, shown
+   on the open pane and under the pointer. A tab's cards trade places by their titles (PaneCanvas). */
+@media (min-width: 769px) {
+  .pane-canvas { --pane-gap: var(--space-2); background: transparent; }
+  .pane-frame,
+  .pane-frame.is-single {
+    /* a card's own layers (its banners, its input line) stay inside it, under a card moving over it */
+    isolation: isolate;
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+  }
+  .pane-frame.is-current:not(.is-single) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  /* the grid inset from the card's edges, under the title's mark: on the body, never on the
+     terminal's mount, whose client size the fit reads (PaneTerminal.css) */
+  .pane-frame-body { padding: 0 var(--space-3) var(--space-2); }
+  .pane-frame-head,
+  .pane-frame.is-single > .pane-frame-head {
+    position: static;
+    gap: var(--space-2);
+    padding: 0 var(--space-1) 0 var(--space-3);
+    background: var(--term-bg);
+    color: var(--text-strong);
+    font-size: var(--fs-sm);
+    pointer-events: auto;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .pane-frame.is-current .pane-frame-head { color: var(--text-strong); }
+  .pane-frame.is-single .pane-frame-title { display: block; }
+  .pane-frame-title { font-weight: var(--fw-medium); }
+  .pane-frame-mark { display: inline-flex; flex: none; color: var(--text-dim); }
+  .pane-frame-mark > svg { width: 15px; height: 15px; }
+  .pane-frame-folder { display: inline; margin-left: var(--space-2); color: var(--text-dim); font-weight: var(--fw-regular); }
+  .pane-frame-actions {
+    display: flex;
+    flex: none;
+    gap: 2px;
+    opacity: 0;
+  }
+  /* shown at once on the open pane and on a focus move (keys switch panes); faded in under the pointer alone */
+  .pane-frame.is-current .pane-frame-actions,
+  .pane-frame.is-single .pane-frame-actions,
+  .pane-frame-actions:focus-within { opacity: 1; }
+  .pane-frame-actions .icon-button { width: 28px; height: 28px; color: var(--text-dim); }
+  .pane-frame-actions .icon-button svg { width: 16px; height: 16px; }
+  .pane-frame-actions .icon-button:disabled { opacity: 0.4; cursor: default; }
+  .pane-canvas.is-sortable .pane-frame-head { cursor: grab; }
+  .pane-canvas.is-sorting,
+  .pane-canvas.is-sorting .pane-frame-head { cursor: grabbing; }
+  /* the held card over the others, lifted; the pane it would trade places with is tinted */
+  .pane-frame.is-lifted { z-index: var(--z-popover); box-shadow: var(--shadow-pop); will-change: transform; }
+  .pane-frame::after {
+    position: absolute;
+    inset: 0;
+    z-index: var(--z-banner);
+    content: "";
+    border-radius: inherit;
+    background: var(--accent-tint);
+    box-shadow: inset 0 0 0 2px var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .pane-frame.is-swap-target::after { opacity: 1; }
+}
+@media (min-width: 769px) and (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  /* the ellipsis a mouse never sees (right-click opens the menu) takes no room in the title bar */
+  .pane-frame-menu:not(:focus-visible) { width: 0; margin-left: calc(-1 * var(--space-2)); overflow: hidden; }
+}
+@media (min-width: 769px) and (hover: hover) and (pointer: fine) {
+  .pane-frame:hover .pane-frame-actions { opacity: 1; transition: opacity var(--dur-fast) ease; }
+  .pane-frame-actions .icon-button:hover:not(:disabled) { color: var(--text); }
+}
+@media (min-width: 769px) and (hover: none) {
+  .pane-frame-actions { opacity: 1; }
+}

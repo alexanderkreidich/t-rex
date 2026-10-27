@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="description" content="Your herdr sessions in a Ghostty-like terminal, in the browser and on your phone. Built like Superlogical's Rex, on the herdr multiplexer and restty." />
+    <meta property="og:title" content="T-Rex" />
+    <meta property="og:description" content="Built like Superlogical's Rex: herdr keeps your sessions, restty draws them with Ghostty's terminal emulator in any browser." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://raw.githubusercontent.com/alexanderkreidich/t-rex/main/public/social-preview.png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
+    <meta property="og:image:alt" content="T-Rex: an amber pixel-art T-Rex rising from the bottom of a dark tile, beside the word T-Rex and a cursor" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#1f1f1f" />
+    <meta name="color-scheme" content="dark" />
+    <!-- The query is a URL no pre-0.3.32 service worker has cached: those serve the plain
+         URL cache-first, which handed Chrome the old `orientation: "any"` manifest on the
+         first launch after an upgrade and spent that day's installed-app update check.
+         use-credentials: a browser fetches the manifest without cookies otherwise, and a
+         proxy that signs every request in answers that with its login page, not the app. -->
+    <link rel="manifest" href="/manifest.webmanifest?v=2" crossorigin="use-credentials" />
+    <link rel="icon" href="/favicon.ico?v=rex2" sizes="32x32" />
+    <link rel="icon" type="image/png" href="/favicon.png?v=rex2" sizes="64x64" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=rex2" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- Leave apple-mobile-web-app-status-bar-style unset to use the normal home-screen
+         status-bar layout instead of drawing beneath it (#164). Existing installs and
+         viewport behavior need separate checks; see docs/ios-home-screen-testing.md. -->
+    <meta name="apple-mobile-web-app-title" content="T-Rex" />
+    <title>T-Rex</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="/src/pwa.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,544 @@
+/* The sidebar's top row (MachineSidebar): the PC switcher, the + at the row's far edge over the
+   rows' status cells. From 769px it is drawn in the header's own top row of the sidebar (App,
+   .header-switcher), outside .sidebar-shell, so it sizes from the global tokens; a phone's drawer
+   heads its list with it. The PC's name starts where the workspaces' names do, half a cell in. */
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--side-gutter) 0;
+}
+
+.pc-switch {
+  /* the rows' hover fill (Sidebar.css --side-hover), which this row cannot inherit from the header */
+  --pc-switch-hover: color-mix(in srgb, var(--bg-hover) 50%, var(--bg-panel));
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--space-2) 0 calc(var(--control-h) / 2 - var(--space-1));
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, transform var(--dur-fast) var(--ease-out);
+}
+
+.pc-switch:active { transform: scale(0.97); }
+.pc-switch[aria-expanded="true"] { background: var(--pc-switch-hover); }
+
+@media (hover: hover) and (pointer: fine) {
+  .pc-switch:hover { background: var(--pc-switch-hover); }
+}
+
+.pc-switch:focus-visible {
+  outline: var(--ring);
+  outline-offset: calc(var(--ring-offset) * -1);
+}
+
+.pc-switch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-switch-chevron {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  margin-left: var(--space-2);
+  color: var(--text-dim);
+}
+
+.pc-switch-chevron svg {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+/* another PC waits on the user: a point on the chevron, ringed in the row's surface */
+.pc-switch-attention {
+  position: absolute;
+  top: calc(-1 * var(--space-1) / 2);
+  right: calc(-1 * var(--space-1));
+  width: calc(var(--dot-size) - var(--hairline));
+  height: calc(var(--dot-size) - var(--hairline));
+  border-radius: var(--radius-pill);
+  background: var(--status-blocked);
+  box-shadow: 0 0 0 calc(var(--hairline) * 2) var(--bg-panel);
+}
+
+.sidebar-row-action.pc-new {
+  flex: none;
+  width: var(--control-h);
+  height: var(--control-h);
+  margin-left: auto;
+}
+
+@media (pointer: coarse) {
+  .pc-switch { height: var(--touch-target); }
+
+  .sidebar-row-action.pc-new {
+    width: var(--touch-target);
+    height: var(--touch-target);
+    margin-right: calc((var(--control-h) - var(--touch-target)) / 2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-switch { transition: background-color var(--dur-fast) ease; }
+  .pc-switch:active { transform: none; }
+}
+
+/* A PC's initial on its own colour in the switcher's menu (MachineSidebar PcMark): the Host the
+   accent, every other PC one of five theme colours its id picks */
+.pc-mark {
+  --pc-hue: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--icon-size);
+  height: var(--icon-size);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--pc-hue) 22%, var(--bg-elevated));
+  color: color-mix(in srgb, var(--pc-hue) 75%, var(--text-strong));
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+}
+
+.pc-mark[data-hue="1"] { --pc-hue: var(--status-working); }
+.pc-mark[data-hue="2"] { --pc-hue: var(--syntax-meta); }
+.pc-mark[data-hue="3"] { --pc-hue: var(--syntax-string); }
+.pc-mark[data-hue="4"] { --pc-hue: var(--syntax-number); }
+.pc-mark[data-hue="5"] { --pc-hue: var(--syntax-keyword); }
+
+/* The PC on screen: its state line, notice or controls first, then its workspaces. */
+.machine-list {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  padding-top: var(--space-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-bottom: var(--space-4);
+}
+
+/* a list that is cut fades out at its lower edge */
+.machine-list::after {
+  content: "";
+  position: sticky;
+  bottom: 0;
+  display: block;
+  height: var(--space-4);
+  background: linear-gradient(transparent, var(--bg-panel));
+  pointer-events: none;
+}
+
+.machine-list > .tree-state { padding-left: var(--side-gutter); }
+
+.machine-group {
+  --machine-indent: var(--side-gutter);
+}
+
+/* the switcher's word for a PC that is not connected: connected is the quiet default and has none */
+.machine-dot {
+  flex: none;
+  width: var(--dot-size);
+  height: var(--dot-size);
+  margin-left: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--status-idle);
+}
+
+.machine-dot.is-error { background: var(--status-blocked); }
+
+.machine-dot.is-connecting,
+.machine-dot.is-reconnecting {
+  background: var(--status-working);
+  animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
+}
+
+.machine-state {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--hairline) * 2);
+  margin: 0;
+  padding: 0 var(--side-gutter) var(--space-2) var(--machine-indent);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+}
+
+.machine-state-word {
+  color: var(--text-dim);
+  font-weight: var(--fw-medium);
+}
+
+.machine-state.is-error .machine-state-word { color: var(--status-blocked); }
+.machine-state.is-connecting .machine-state-word,
+.machine-state.is-reconnecting .machine-state-word { color: var(--status-working); }
+
+/* the server's own words can run long (socket paths): two lines, the full text on hover */
+.machine-state-detail {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+/* the step to take when the server's words name one (MachineSidebar.tsx): a notch above its words */
+.machine-state-next {
+  color: var(--text);
+}
+
+.machine-empty {
+  padding: 0 var(--side-gutter) var(--space-2) var(--machine-indent);
+}
+
+.machine-offline { opacity: 0.5; }
+
+.machine-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: var(--space-2);
+  margin: 0 var(--space-3) var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg-elevated);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+/* the rename form reflows: Rename sits at the end of the name field's row where the two fit, and
+   under the field, at its start, where they do not (a 240px sidebar, a phone's drawer) */
+.machine-controls form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.machine-controls form > .field {
+  flex: 1 1 10rem;
+}
+
+/* buttons that share a row share its height (the default stretch), so a wrapped label never
+   leaves its neighbours hanging from the row's bottom edge */
+.machine-control-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.machine-controls .field {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+/* a one-line label is the standard control's height (--control-h as a floor; the block padding is
+   small enough to stay under it); only a label that wraps grows its button */
+.machine-controls .btn {
+  max-width: 100%;
+  min-width: 0;
+  min-height: var(--control-h);
+  height: auto;
+  padding-block: var(--space-1);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* fingers: a touch-sized Rename is taller than the field, so it keeps its own line under it */
+@media (pointer: coarse) {
+  .machine-controls .btn {
+    min-height: var(--touch-target);
+  }
+
+  .machine-controls form > .field {
+    flex-basis: 100%;
+  }
+}
+
+/* only the removal in flight (MachineSidebar.tsx marks it aria-busy) keeps most of its tint, so its
+   warning stays readable while the request runs; disabled because another action of the panel is
+   running, it dims like its neighbours */
+.machine-controls .btn-danger[aria-busy="true"] {
+  opacity: 0.85;
+}
+
+.machine-dialog {
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: 0;
+  border: var(--hairline) solid var(--border-strong);
+  color: var(--text);
+}
+
+/* The only native <dialog> in the app, so it has no .modal-scrim ancestor and the phone
+   bottom-sheet rules in styles.css never reach it: it stays a centred card on a phone. A dialog
+   opened with showModal() lives in the top layer and is centred by the UA's `margin: auto`,
+   clamped by its `max-width`/`max-height` and stretched by `inset: 0`, so the sheet form needs
+   all three reset, not just a border radius. */
+@media (max-width: 640px) {
+  .machine-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: 92%;
+    margin: auto auto 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+/* the phone's keyboard is up (lib/viewport.ts): as the sheet does, this one ends where the
+   keyboard begins instead of sitting behind it — the same reason styles.css drops the sheet's
+   bottom padding here */
+@media (max-width: 640px) {
+  [data-keyboard] .machine-dialog {
+    inset-block-start: 0;
+    inset-block-end: auto;
+    height: var(--app-height, 100%);
+    margin-block: auto 0;
+    padding-bottom: 0;
+  }
+}
+
+.machine-dialog::backdrop { background: var(--scrim); }
+
+.machine-dialog .modal-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.machine-dialog form,
+.machine-advanced {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.machine-advanced { padding-top: var(--space-3); }
+
+.machine-dialog summary {
+  padding: var(--space-2) 0;
+  cursor: pointer;
+}
+
+.machine-challenge pre {
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* the host-key question: the fingerprint to compare, one sentence, ssh's own words folded */
+.machine-fingerprint-label {
+  margin: 0 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.machine-fingerprint {
+  margin: 0;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+
+.machine-challenge > .field-hint {
+  margin: var(--space-3) 0 0;
+}
+
+.machine-ssh-fold > summary {
+  position: relative;
+  width: fit-content;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+/* a finger's floor: the toggle keeps its one line and takes a --touch-target hit area, both ways,
+   through an invisible expander around it */
+@media (pointer: coarse) {
+  .machine-ssh-fold > summary::before {
+    content: "";
+    position: absolute;
+    inset: calc((1lh - var(--touch-target)) / 2) min(0px, calc((100% - var(--touch-target)) / 2));
+  }
+}
+
+.machine-ssh-fold pre {
+  margin: var(--space-1) 0 0;
+}
+
+.machine-progress {
+  padding: var(--space-3);
+  background: var(--bg-hover);
+  border-radius: var(--radius-md);
+  overflow-wrap: anywhere;
+}
+
+/* what ssh printed while it waits: a check URL to visit, a banner; bounded, the newest lines stay */
+.machine-ssh-output {
+  max-height: 9em;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  overflow: auto;
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.machine-ssh-output a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: var(--space-1);
+}
+
+.machine-install-list {
+  padding-left: var(--space-5);
+  line-height: 1.7;
+}
+
+.machine-error {
+  margin: 0;
+  color: var(--status-blocked);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.machine-group > .machine-error {
+  padding: 0 var(--space-3) var(--space-2) var(--machine-indent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .machine-dot.is-connecting,
+  .machine-dot.is-reconnecting { animation: none; }
+}
+
+/* a PC that retrying cannot reconnect: the next step, spelled out, with its button */
+.machine-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0 var(--space-3) var(--space-2) var(--machine-indent);
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--status-blocked);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+}
+
+.machine-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.machine-action-text strong {
+  color: var(--status-blocked);
+  font-weight: var(--fw-medium);
+}
+
+
+.machine-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.machine-action-reason {
+  overflow-wrap: anywhere;
+}
+
+.machine-action.is-updating {
+  border-color: var(--border);
+  width: calc(100% - var(--space-3) - var(--machine-indent));
+}
+
+/* a bridge install: the step, a bar, the bytes and time left */
+.bridge-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+}
+
+.bridge-progress-step {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.bridge-progress-count,
+.bridge-progress-detail {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-progress-detail { margin: 0; }
+
+.bridge-progress-bar {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+}
+
+.bridge-progress-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--status-working);
+  transition: width 0.3s ease;
+}
+
+/* no size to measure (install, restart): a band that keeps moving */
+.bridge-progress-bar span.is-indeterminate {
+  width: 35%;
+  animation: bridge-progress-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes bridge-progress-slide {
+  from { left: -35%; }
+  to { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bridge-progress-bar span { transition: none; }
+  .bridge-progress-bar span.is-indeterminate { left: 0; width: 100%; animation: none; opacity: 0.5; }
+}
+
+/* an update in progress is news, not an error */
+.machine-action.is-updating .machine-action-text strong { color: var(--status-working); }
+
+.machine-action.is-setup { border-color: var(--border); }
+.machine-action.is-setup .machine-action-text strong { color: var(--text); }
+
+/* From 769px the top row and the list stand on the window's recessed surface (styles.css) */
+@media (min-width: 769px) {
+  .pc-switch { --pc-switch-hover: color-mix(in srgb, var(--text) 5%, transparent); }
+  .pc-switch-attention { box-shadow: 0 0 0 calc(var(--hairline) * 2) var(--bg); }
+  .machine-list::after { background: linear-gradient(transparent, var(--bg)); }
+}

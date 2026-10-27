@@ -1,0 +1,76 @@
+name: Mac app
+# The native Mac app (macos/, docs/macos.md) for Apple silicon: built, opened once as a user would
+# (scripts/mac-app-smoke.ts), and kept as the run's artifact, a zip anyone with access to the
+# repository's Actions can download and try. release.yml calls it to attach the app to a release.
+on:
+  workflow_call:
+  pull_request:
+    paths:
+      - 'macos/**'
+      - 'scripts/build-mac-app.ts'
+      - 'scripts/build-remote-bundle.ts'
+      - 'scripts/mac-app-smoke.ts'
+      - '.github/workflows/mac-app.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'macos/**'
+      - 'scripts/build-mac-app.ts'
+      - 'scripts/build-remote-bundle.ts'
+      - 'scripts/mac-app-smoke.ts'
+      - '.github/workflows/mac-app.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mac-app-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  mac:
+    name: Mac app (arm64)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # macos/ needs Swift 6.2 (Xcode 26); the image's default Xcode is 16.4, Swift 6.1
+      - name: Select Xcode 26
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          swift --version
+      - uses: ./.github/actions/setup-ci
+      - name: Install checksum-pinned herdr 0.9.3
+        run: |
+          mkdir -p "$RUNNER_TEMP/herdr-bin"
+          curl --fail --location --retry 3 https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-macos-aarch64 -o "$RUNNER_TEMP/herdr-bin/herdr"
+          echo "5173a3e0ae42d5d1ab7ebfa5d5e6329f7c3d23f8e1a3677c7ce3231da2884157  $RUNNER_TEMP/herdr-bin/herdr" | shasum -a 256 --check
+          chmod +x "$RUNNER_TEMP/herdr-bin/herdr"
+          echo "$RUNNER_TEMP/herdr-bin" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck && bun run build
+      - run: swift test --package-path macos
+      - run: bun run build:mac
+      - name: Open the app
+        env:
+          T_REX_SNAPSHOT: ${{ runner.temp }}/t-rex-window.png
+        run: |
+          # the app reads the login shell's PATH, which does not hold the runner's herdr
+          echo "export PATH=\"$RUNNER_TEMP/herdr-bin:\$PATH\"" >> ~/.zprofile
+          bun scripts/mac-app-smoke.ts macos/build/T-Rex.app
+      - name: Logs
+        if: always()
+        run: tail -n 80 ~/Library/Logs/T-Rex/*.log || true
+      - name: Zip the app
+        # ditto keeps the app's signature and executable bits, as Finder's Compress does
+        run: ditto -c -k --keepParent macos/build/T-Rex.app "$RUNNER_TEMP/T-Rex-arm64.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: T-Rex-mac-arm64
+          path: ${{ runner.temp }}/T-Rex-arm64.zip
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v7
+        with:
+          name: window-snapshot
+          path: ${{ runner.temp }}/t-rex-window.png
+          if-no-files-found: warn

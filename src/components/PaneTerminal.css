@@ -1,0 +1,320 @@
+/*
+ * Terminal chrome for PaneTerminal.tsx: the restty mount, the empty placeholder
+ * and the status banners. The host background equals --term-bg so the canvas
+ * edge is invisible; the banners float over the top-right corner so they never
+ * steal rows from the pty. The stack is a column: the mount takes every row the
+ * key bar (KeyBar.css) leaves, and clips so a pending refit never paints over it.
+ */
+
+/* Nerd Font icons in the chrome's code stack (--font-mono, lib/fontFamily.ts); the terminal
+   loads the same file as bytes (lib/restty/fonts.ts). The range is the private use area alone,
+   so the browser fetches the file only once a page shows an icon, and a heart, a lightning bolt
+   or a box line keeps the system font's glyph */
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("../fonts/SymbolsNerdFontMono-Regular.woff2") format("woff2");
+  font-display: block;
+  unicode-range: U+E000-F8FF, U+F0000-FFFFD;
+}
+
+.terminal-stack {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* the grid runs edge to edge: no gutter on the host (styles.css) or on the terminal, so the cells
+   start at the window's edge and under the header's rule. Never pad the mount: the fit reads its
+   client size, so padding there would overflow the last columns */
+.pane-terminal {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  /* a drag here is ours (PaneTerminal turns it into wheel events for herdr): without
+     this the browser takes the gesture after its first move and scrolls the page or
+     the input line instead, or starts pull-to-refresh */
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+/* a grid that is not this browser's own (observing, or mirrored from a PC that cannot attach)
+   can be larger than the mount: it scrolls instead of clipping, so every cell can be reached.
+   A finger pans it through PaneTerminal's touch handlers (touch-action stays none), a mouse
+   by wheel or scrollbar */
+.pane-terminal[data-adopted-grid] {
+  overflow: auto;
+}
+
+/* restty's box (lib/restty/terminal.ts): it keeps the size of its last fit while the mount
+   changes, so a drag of the window edge clips or uncovers cells instead of stretching the canvas,
+   and an adopted grid sets it to the grid's own size, which the mount then scrolls */
+.restty-terminal {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.restty-terminal-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+/* the field restty types from: at the cursor (restty moves it there), unseen and untouchable */
+.terminal-ime {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 1em;
+  height: 1em;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  overflow: hidden;
+  resize: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* the mount's own box: everything that may overlay the pty (the viewport tools, the pinch
+   badge) is positioned against THIS, never against the stack: the input line and key bar
+   below keep their rows */
+.terminal-surface {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* A pinch's target size floats above the grid, without taking rows or touches. */
+.terminal-font-size {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: var(--z-banner);
+  transform: translateX(-50%);
+  padding: var(--space-1) var(--space-2);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-base);
+  white-space: nowrap;
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+}
+
+/* no pane selected: the mount keeps its size (the fit needs it) but never paints, so its
+   cursor cannot show through the placeholder */
+.pane-terminal.is-idle {
+  visibility: hidden;
+}
+
+.terminal-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-banner); /* above the terminal mount, like the banners; pointer-events stay off */
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-size: var(--fs-md);
+  pointer-events: none;
+}
+
+.terminal-placeholder-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.terminal-placeholder svg {
+  width: var(--space-6);
+  height: var(--space-6);
+}
+
+.terminal-placeholder.is-restore-error {
+  padding: 0 var(--space-4);
+  text-align: center;
+}
+
+.terminal-placeholder.is-restore-error svg {
+  color: var(--status-blocked);
+}
+
+/* herdr's own words: what failed and what to do about it */
+.terminal-placeholder-detail {
+  max-width: 36rem;
+  font-size: var(--fs-sm);
+}
+
+/* the banners stack in one top-right column: any state combination (warning XOR
+   review, observe alongside either) renders without collisions, and the column lets
+   clicks pass through to the pty except where the review banner re-enables them */
+.terminal-banners {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-3);
+  /* one above the input line and the masked input, which float at --z-banner from a slot later
+     in the stack (TerminalInput.css): in a short pane a grown line reaches the grid's top, and the
+     banners and their buttons (Send/Discard, Dismiss) must stay over it */
+  z-index: calc(var(--z-banner) + 1);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  max-width: calc(100% - 2 * var(--space-3));
+  pointer-events: none;
+}
+
+/* the wait-for-input live region (PaneTerminal.tsx) stays in the column while empty, clipped by the
+   shared primitive (.visually-hidden, styles.css): its 1px box is anchored at the column's top-left
+   corner, not left at its static place at the end of the column, where its negative margin stood it
+   one pixel past the column's edge and widened it (the T14 probe measures scrollWidth against
+   clientWidth). Nothing is drawn either way */
+.terminal-banners > .visually-hidden {
+  top: 0;
+  left: 0;
+}
+
+.terminal-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--chip-h);
+  padding: 0 var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  /* a narrow pane (a phone, or a split on a desktop) wraps a banner's sentences instead of letting
+     it run past the pane's edge; held input (.draft-held, .draft-text) stays on one line instead */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* what does not fit beside the text (held input, actions) goes to the next line */
+  flex-wrap: wrap;
+  /* never wider than the column, which the pane caps: while the column measures its content, the
+     held preview's percentage cap cannot act and its unbreakable command would size the banner, and
+     a right-anchored banner wider than a narrow split runs out of the pane's left edge */
+  max-width: 100%;
+}
+
+/* a button's label stays whole: it moves to the next line instead of breaking letter by letter */
+.terminal-banner button {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.terminal-banner-warning {
+  border-color: var(--status-working);
+  color: var(--status-working);
+}
+
+/* a banner's own action takes clicks back from the pass-through column */
+.terminal-banner-action {
+  pointer-events: auto;
+}
+
+/* not a fault: a lens herdr does not offer on this PC yet */
+.terminal-banner-soon {
+  border-color: var(--accent);
+  color: var(--text);
+  background: linear-gradient(var(--accent-tint), var(--accent-tint)) var(--bg-elevated);
+}
+
+.terminal-banner-output-error {
+  max-width: 100%;
+  white-space: normal;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  pointer-events: auto;
+}
+
+/* view-only state: the neutral pill, a glyph and the word. Nothing is wrong and nothing is asked,
+   so it takes no state color; the glyph is the text's size */
+.terminal-banner-observe svg {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+
+/* the held-input row: the command and its two controls (send, discard), no sentence. Wider than
+   a pill because it carries controls, so it takes --radius-md (a control-bearing box, not a chip)
+   and is as tall as its .icon-button pair (--touch-target on a coarse pointer). It only renders
+   while CONNECTED (the reconnecting banner owns the disconnected slot), and it is the one banner
+   that accepts pointer events. */
+.terminal-banner-draft {
+  height: auto;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  max-width: 100%;
+  pointer-events: auto;
+}
+
+/* the held-draft echo inside the reconnecting pill: capped like the review text, on one line and
+   cut with an ellipsis (its title holds the whole text), so a command is never broken inside a
+   word as the wrapping banner around it would; the text itself in mono, as the review banner's */
+.draft-held {
+  max-width: min(32ch, 100%);
+  white-space: nowrap;
+  overflow-wrap: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* takes the pointer back from the pass-through column, as a banner's action does: a title only
+     shows for an element the pointer can reach */
+  pointer-events: auto;
+}
+
+.draft-held code {
+  font-family: var(--font-mono);
+}
+
+/* the row's held text: one line, cut with an ellipsis (its title holds the whole text), never
+   broken inside a word as the wrapping banner around it would break a command at its hyphens */
+.terminal-banner-draft .draft-text {
+  max-width: min(32ch, 100%);
+  white-space: nowrap;
+  overflow-wrap: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+/* what the row has to tell only when it applies (text left out, an Enter left out): a line of its
+   own under the command and its controls, starting at the left */
+.terminal-banner-draft .draft-truncated {
+  flex-basis: 100%;
+  color: var(--text-dim);
+}
+
+.terminal-banner-draft .draft-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  gap: var(--space-1);
+}
+
+/* phones: a wrapping box stops being a chip, so it takes padding and --radius-md (the held-input
+   row already does); its lines start at the left as prose does, however the box is anchored */
+@media (max-width: 480px) {
+  .terminal-banner-soon,
+  .terminal-banner-warning {
+    max-width: min(36ch, 100%);
+    text-align: start;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-md);
+  }
+}

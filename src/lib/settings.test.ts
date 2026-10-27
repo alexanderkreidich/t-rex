@@ -1,0 +1,662 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parseThemeBlocks, parseThemeValue, resolveEntry, ThemeValueError } from "./themeCss.ts";
+import { LIGHT_ANSI_ROLES } from "./themeRoles.ts";
+import baseline from "./themes.legacy-baseline.json";
+import { DEFAULT_THEME, ROLES, SHADOW_GEOMETRY, SUPPORTED_ENTRIES, themeColor as tableThemeColor } from "./themes.ts";
+import { DEFAULT_ID } from "../../scripts/generate-themes.ts";
+import { FONT_FAMILY_MAX_CHARS } from "./fontFamily.ts";
+import { DEFAULT_KEY_BAR_ITEMS, migrateKeyBarItems } from "./keyBar.ts";
+import { SHARED_SETTING_KEYS } from "../../shared/preferences.ts";
+import { SETTING_SCOPE, alertPrefs, CHAT_FONT_MAX, CHAT_FONT_MIN, chatFontSize, DEFAULT_SETTINGS, MARKDOWN_WIDTHS, sanitizeSettings, terminalTheme } from "./settings.ts";
+import { applyToDocument, loadSettings, saveSettings } from "./settings.ts";
+import { sanitizeSettings as oldSanitizeSettings, saveSettings as oldSaveSettings } from "./settings.legacy-fixture.ts";
+import { themeFor } from "./themeFor.ts";
+
+describe("saved theme migration", () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  let records: Map<string, string>;
+  beforeEach(() => {
+    records = new Map();
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { localStorage: {
+      getItem: (key: string) => records.get(key) ?? null,
+      setItem: (key: string, value: string) => records.set(key, value),
+    } } });
+  });
+  afterEach(() => {
+    if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+    else Reflect.deleteProperty(globalThis, "window");
+    if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+    else Reflect.deleteProperty(globalThis, "document");
+  });
+  const main = "t-rex:settings";
+  const protectedThemes = "t-rex:themes";
+  const putOld = (record: object) => records.set(main, JSON.stringify(record));
+  const readOld = () => oldSanitizeSettings(JSON.parse(records.get(main) ?? "{}"));
+
+  it.each([
+    [{ theme: "dark", palette: "catppuccin" }, "catppuccin", "catppuccin"],
+    [{ theme: "system", palette: "amber", paletteLight: "catppuccin", paletteDark: "charcoal" }, "charcoal", "catppuccin"],
+    [{ theme: "dark", palette: "catppuccin", paletteDark: "charcoal" }, "catppuccin", "catppuccin"],
+    [{ theme: "dark", palette: "amber", paletteDark: "charcoal" }, "amber", "amber"],
+  ] as const)("loads the pinned legacy appearance %j (a, b, c, F3)", (raw, dark, light) => {
+    putOld(raw);
+    const settings = loadSettings();
+    expect(themeFor(settings, "dark").id).toBe(dark);
+    expect(themeFor(settings, "light").id).toBe(light);
+  });
+
+  it("keeps every legacy look readable by the pinned old sanitizer (e)", () => {
+    for (const palette of ["amber", "charcoal", "catppuccin"] as const) {
+      for (const theme of ["dark", "light", "system"] as const) {
+        const settings = sanitizeSettings({ theme, darkTheme: palette, lightTheme: palette });
+        saveSettings(settings);
+        const old = readOld();
+        expect(old.palette).toBe(palette);
+        expect(old.paletteDark).toBe(palette);
+        expect(old.paletteLight).toBe(palette);
+        expect(old).not.toHaveProperty("darkTheme");
+      }
+    }
+    saveSettings(sanitizeSettings({ darkTheme: "tokyo-night" }));
+    expect(readOld().palette).toBe("amber");
+  });
+
+  it("survives an old sanitizer and whole-record unrelated save (f)", () => {
+    saveSettings(sanitizeSettings({ darkTheme: "tokyo-night" }));
+    const old = readOld();
+    oldSaveSettings({ ...old, terminalFontSize: 18 });
+    expect(loadSettings().darkTheme).toBe("tokyo-night");
+    expect(loadSettings().terminalFontSize).toBe(18);
+  });
+
+  it("survives repeated stale saves from an already-open old tab (f1)", () => {
+    putOld({ theme: "dark", palette: "charcoal" });
+    const stale = readOld();
+    saveSettings(sanitizeSettings({ darkTheme: "tokyo-night" }));
+    for (const terminalFontSize of [14, 15, 16]) {
+      oldSaveSettings({ ...stale, terminalFontSize });
+      expect(loadSettings().darkTheme).toBe("tokyo-night");
+      expect(loadSettings().terminalFontSize).toBe(terminalFontSize);
+    }
+  });
+
+  it.each(["amber", "charcoal"] as const)("documents that an outdated tab's explicit %s pick cannot reach new code without sync (f2, f3)", (palette) => {
+    saveSettings(sanitizeSettings({ darkTheme: "tokyo-night" }));
+    oldSaveSettings({ ...readOld(), palette });
+    expect(loadSettings().darkTheme).toBe("tokyo-night");
+  });
+
+  it("loads and saves idempotently with a separate protected mirror (g)", () => {
+    putOld({ theme: "system", palette: "amber", paletteDark: "charcoal", paletteLight: "catppuccin" });
+    const first = loadSettings();
+    saveSettings(first);
+    expect(loadSettings()).toEqual(first);
+    saveSettings(loadSettings());
+    expect(loadSettings()).toEqual(first);
+    expect(JSON.parse(records.get(protectedThemes) ?? "{}")).toEqual({
+      darkTheme: "charcoal", lightTheme: "catppuccin",
+      mirror: { palette: "charcoal", paletteDark: "charcoal", paletteLight: "catppuccin" },
+    });
+  });
+
+  it("writes the row's actual mode, palette, meta and color scheme on either side (k)", () => {
+    const root = { lang: "", dataset: {}, style: { colorScheme: "", setProperty() {}, removeProperty() {} } };
+    let meta = "";
+    Object.defineProperty(globalThis, "document", { configurable: true, value: {
+      documentElement: root, querySelector: () => ({ setAttribute: (_name: string, value: string) => { meta = value; } }),
+    } });
+    const settings = sanitizeSettings({ theme: "light", lightTheme: "dracula" });
+    const entry = themeFor(settings, "light");
+    applyToDocument(settings, entry, "en");
+    expect(root.dataset).toMatchObject({ theme: "dark", palette: "dracula" });
+    expect(root.style.colorScheme).toBe("dark");
+    expect(meta).toBe(entry.bgPanel);
+    expect(terminalTheme(entry.mode, entry.id)).toEqual(entry.terminal);
+  });
+});
+
+it("keeps a tab's pane while out of use until this device turns the pause on", () => {
+  expect(DEFAULT_SETTINGS.releasePaneAway).toBe(false);
+  expect(sanitizeSettings({}).releasePaneAway).toBe(false);
+  expect(sanitizeSettings({ releasePaneAway: true }).releasePaneAway).toBe(true);
+  expect(sanitizeSettings({ releasePaneAway: "true" }).releasePaneAway).toBe(false);
+});
+
+it("keeps the screen wake lock off until this device explicitly enables it", () => {
+  expect(DEFAULT_SETTINGS.keepScreenOn).toBe(false);
+  expect(sanitizeSettings({}).keepScreenOn).toBe(false);
+  expect(sanitizeSettings({ keepScreenOn: true }).keepScreenOn).toBe(true);
+  expect(sanitizeSettings({ keepScreenOn: "true" }).keepScreenOn).toBe(false);
+  // the terminal's wheel speed: one report per wheel event unless chosen, whole and bounded
+  expect(sanitizeSettings({}).terminalWheelSpeed).toBe(1);
+  expect(sanitizeSettings({ terminalWheelSpeed: 3 }).terminalWheelSpeed).toBe(3);
+  expect(sanitizeSettings({ terminalWheelSpeed: 2.6 }).terminalWheelSpeed).toBe(3);
+  expect(sanitizeSettings({ terminalWheelSpeed: 99 }).terminalWheelSpeed).toBe(10);
+  expect(sanitizeSettings({ terminalWheelSpeed: 0 }).terminalWheelSpeed).toBe(1);
+  expect(sanitizeSettings({ terminalWheelSpeed: "3" }).terminalWheelSpeed).toBe(1);
+});
+
+it("keeps the suggestion chip off until this device turns it on, whatever an older version stored", () => {
+  expect(sanitizeSettings({}).suggestionChip).toBe(false);
+  expect(sanitizeSettings({ showSuggestionChip: true }).suggestionChip).toBe(false);
+  expect(sanitizeSettings({ suggestionChip: true }).suggestionChip).toBe(true);
+  expect(sanitizeSettings({ suggestionChip: "true" }).suggestionChip).toBe(false);
+});
+
+it("keeps sidebar rows on one line unless two lines were chosen", () => {
+  expect(sanitizeSettings({}).sidebarRows).toBe("one");
+  expect(sanitizeSettings({ sidebarRows: "two" }).sidebarRows).toBe("two");
+  for (const sidebarRows of [null, true, "three", 2]) {
+    expect(sanitizeSettings({ sidebarRows }).sidebarRows).toBe("one");
+  }
+});
+
+describe("focus mode", () => {
+  it("is on by default, including saved records without a valid choice", () => {
+    expect(DEFAULT_SETTINGS.focusMode).toBe(true);
+    expect(sanitizeSettings({}).focusMode).toBe(true);
+    for (const focusMode of [undefined, null, "true", "false", 0, 1]) {
+      expect(sanitizeSettings({ focusMode }).focusMode).toBe(true);
+    }
+  });
+
+  it("preserves this device's on/off choice across a saved-record round trip", () => {
+    for (const focusMode of [false, true]) {
+      const settings = sanitizeSettings({ focusMode });
+      expect(settings.focusMode).toBe(focusMode);
+      expect(sanitizeSettings(JSON.parse(JSON.stringify(settings))).focusMode).toBe(focusMode);
+    }
+  });
+});
+
+it("draws agent logos in their brand colors unless Mono was chosen", () => {
+  expect(DEFAULT_SETTINGS.agentMarks).toBe("color");
+  expect(sanitizeSettings({}).agentMarks).toBe("color");
+  expect(sanitizeSettings({ agentMarks: "mono" }).agentMarks).toBe("mono");
+  for (const agentMarks of [null, "Mono", "off", 1]) {
+    expect(sanitizeSettings({ agentMarks }).agentMarks).toBe("color");
+  }
+});
+
+describe("clipboard from a pane", () => {
+  it("is on in a fresh install", () => {
+    expect(DEFAULT_SETTINGS.paneClipboard).toBe(true);
+    expect(sanitizeSettings({}).paneClipboard).toBe(true);
+  });
+
+  it("turns on for a 0.4.1 record, whose false was saved with any other change", () => {
+    const loaded = sanitizeSettings(JSON.parse(JSON.stringify({ theme: "light", terminalOsc52: false })));
+    expect(loaded.paneClipboard).toBe(true);
+    expect(loaded).not.toHaveProperty("terminalOsc52");
+  });
+
+  it("stays off once turned off, across a save and a reload", () => {
+    const chosen = sanitizeSettings({ ...sanitizeSettings({ terminalOsc52: false }), paneClipboard: false });
+    const reloaded = sanitizeSettings(JSON.parse(JSON.stringify(chosen)));
+    expect(reloaded.paneClipboard).toBe(false);
+    expect(sanitizeSettings({ ...reloaded, theme: "dark" }).paneClipboard).toBe(false);
+    expect(sanitizeSettings({ paneClipboard: "false" }).paneClipboard).toBe(true);
+  });
+});
+
+it("drops the folder grouping an older version stored", () => {
+  expect(sanitizeSettings({ sidebarGrouping: "directory" })).not.toHaveProperty("sidebarGrouping");
+});
+
+describe("chat font size", () => {
+  it("follows the density until one is chosen, and keeps a chosen one within bounds", () => {
+    expect(chatFontSize(DEFAULT_SETTINGS)).toBe(14);
+    expect(chatFontSize(sanitizeSettings({ density: "compact" }))).toBe(13);
+    expect(chatFontSize(sanitizeSettings({ density: "compact", chatFontSize: 17 }))).toBe(17);
+    expect(sanitizeSettings({ chatFontSize: 99 }).chatFontSize).toBe(CHAT_FONT_MAX);
+    expect(sanitizeSettings({ chatFontSize: 2 }).chatFontSize).toBe(CHAT_FONT_MIN);
+    expect(sanitizeSettings({ chatFontSize: 15.6 }).chatFontSize).toBe(16);
+    expect(sanitizeSettings({ chatFontSize: "18" }).chatFontSize).toBeNull();
+    expect(sanitizeSettings({ terminalFontSize: 15 }).chatFontSize).toBeNull();
+  });
+
+});
+
+describe("font families", () => {
+  const family = (value: unknown): string => sanitizeSettings({ terminalFontFamily: value }).terminalFontFamily;
+
+  it("keep today's fonts until a list is typed, and ignore anything that is not text", () => {
+    expect(DEFAULT_SETTINGS.terminalFontFamily).toBe("");
+    expect(DEFAULT_SETTINGS.chatFontFamily).toBe("");
+    expect(sanitizeSettings({}).terminalFontFamily).toBe("");
+    expect(sanitizeSettings({}).chatFontFamily).toBe("");
+    for (const value of [undefined, null, 7, true, ["D2Coding"], { name: "D2Coding" }]) expect(family(value)).toBe("");
+    expect(family("")).toBe("");
+    expect(family("   ")).toBe("");
+    expect(family(" , ,, ")).toBe("");
+  });
+
+  it("trim each name, drop empty ones and join them the CSS way", () => {
+    expect(family("  D2Coding  ")).toBe("D2Coding");
+    expect(family("D2Coding,,  , monospace,")).toBe("D2Coding, monospace");
+    expect(family(",D2Coding")).toBe("D2Coding");
+  });
+
+  it("quote names with spaces once, and keep quoted names quoted", () => {
+    expect(family("Cascadia Mono")).toBe('"Cascadia Mono"');
+    expect(family("  Cascadia    Mono  ")).toBe('"Cascadia Mono"');
+    expect(family('D2Coding, "Cascadia Mono", monospace')).toBe('D2Coding, "Cascadia Mono", monospace');
+    expect(family("'Cascadia Mono'")).toBe('"Cascadia Mono"');
+    expect(family('" Cascadia Mono "')).toBe('"Cascadia Mono"');
+    // quoted, a generic name is a font by that name: the user's quotes stay
+    expect(family('"monospace"')).toBe('"monospace"');
+    // a stray or unbalanced quote cannot end the CSS string early
+    expect(family('Cascadia"Mono')).toBe("CascadiaMono");
+    expect(family('"Cascadia Mono')).toBe('"Cascadia Mono"');
+    expect(family('""')).toBe("");
+  });
+
+  it("quote what CSS cannot read bare", () => {
+    expect(family("3270 Nerd Font")).toBe('"3270 Nerd Font"');
+    expect(family("1942report")).toBe('"1942report"');
+    expect(family("inherit, D2Coding")).toBe('"inherit", D2Coding');
+    expect(family("나눔고딕코딩")).toBe("나눔고딕코딩");
+    expect(family("Sarasa-Mono-K")).toBe("Sarasa-Mono-K");
+  });
+
+  it("compose a decomposed name, so it matches the installed font", () => {
+    const decomposed = "나눔고딕코딩".normalize("NFD");
+    expect(decomposed).not.toBe("나눔고딕코딩");
+    expect(family(decomposed)).toBe("나눔고딕코딩");
+    expect(family(`D2Coding, ${"나눔 고딕".normalize("NFD")}`)).toBe('D2Coding, "나눔 고딕"');
+  });
+
+  it("strip what could leave the declaration", () => {
+    expect(family("D2Coding; color: red")).toBe('"D2Coding color: red"');
+    expect(family("D2Coding} body { color: red")).toBe('"D2Coding body color: red"');
+    expect(family("</style><script>x</script>")).toBe('"/stylescriptx/script"');
+    expect(family("D2\\Coding")).toBe("D2Coding");
+    expect(family("D2\u0000Coding\nMono\t")).toBe("D2CodingMono");
+    for (const unsafe of [";", "{", "}", "<", ">", "\\", "\u0000", "\u001f", "\u007f"]) expect(family(`x${unsafe}y`)).toBe("xy");
+  });
+
+  it("stay within the length limit, dropping whole names past it", () => {
+    const long = Array.from({ length: 40 }, (_, index) => `Font Name ${index}`).join(", ");
+    const kept = family(long);
+    expect(kept.length).toBeLessThanOrEqual(FONT_FAMILY_MAX_CHARS);
+    expect(kept.startsWith('"Font Name 0", "Font Name 1"')).toBe(true);
+    // every name that made it is whole: its quotes pair up
+    expect(kept.split(", ").every((name) => /^"Font Name \d+"$/.test(name))).toBe(true);
+    expect(family("x".repeat(FONT_FAMILY_MAX_CHARS + 1))).toBe("");
+    expect(family("x".repeat(FONT_FAMILY_MAX_CHARS))).toBe("x".repeat(FONT_FAMILY_MAX_CHARS));
+  });
+
+  it("are the same list after a second pass, so a saved one never drifts", () => {
+    for (const typed of ['D2Coding, "Cascadia Mono", monospace', "'Fira Code' ,  Menlo", "inherit, 3270 Nerd Font"]) {
+      const once = family(typed);
+      expect(family(once)).toBe(once);
+    }
+  });
+
+  it("sanitize the chat's list the same way, apart from the terminal's", () => {
+    const both = sanitizeSettings({ terminalFontFamily: "D2Coding", chatFontFamily: " Pretendard ; , Noto Sans KR" });
+    expect(both.terminalFontFamily).toBe("D2Coding");
+    expect(both.chatFontFamily).toBe('Pretendard, "Noto Sans KR"');
+  });
+});
+
+describe("alert choices", () => {
+  it("keep alerts on unless this device turned them off with the bell", () => {
+    expect(DEFAULT_SETTINGS.alertsOn).toBe(true);
+    expect(sanitizeSettings({}).alertsOn).toBe(true);
+    expect(sanitizeSettings({ alertsOn: false }).alertsOn).toBe(false);
+    expect(sanitizeSettings({ alertsOn: "no" }).alertsOn).toBe(true);
+  });
+
+  it("default to questions and long turns, and drop anything unknown to the default", () => {
+    expect(alertPrefs(DEFAULT_SETTINGS)).toEqual({ input: true, done: "long" });
+    expect(alertPrefs(sanitizeSettings({ alertInput: false, alertDone: "always" }))).toEqual({ input: false, done: "always" });
+    expect(alertPrefs(sanitizeSettings({ alertInput: "no", alertDone: "sometimes" }))).toEqual({ input: true, done: "long" });
+  });
+});
+
+
+describe("remote PCs in the sidebar", () => {
+  it("stay hidden until chosen, and are shared by every browser", () => {
+    expect(DEFAULT_SETTINGS.showRemotePcs).toBe(false);
+    expect(sanitizeSettings({ showRemotePcs: true }).showRemotePcs).toBe(true);
+    expect(sanitizeSettings({ showRemotePcs: "yes" }).showRemotePcs).toBe(false);
+    expect(SETTING_SCOPE.showRemotePcs).toBe("shared");
+  });
+});
+
+describe("quick replies row", () => {
+  it("stays hidden until chosen in settings", () => {
+    expect(DEFAULT_SETTINGS.showQuickReplies).toBe(false);
+    expect(sanitizeSettings({ showQuickReplies: true }).showQuickReplies).toBe(true);
+    expect(sanitizeSettings({ showQuickReplies: "yes" }).showQuickReplies).toBe(false);
+  });
+});
+
+describe("language", () => {
+  it("keeps a listed language and loads a removed one (Turkish) as System", () => {
+    expect(sanitizeSettings({ language: "ko" }).language).toBe("ko");
+    expect(sanitizeSettings({ language: "tr" }).language).toBe("system");
+  });
+});
+
+describe("palette", () => {
+  it("defaults to codex, and reads a record from before palettes as amber, the look it had", () => {
+    expect(DEFAULT_SETTINGS.palette).toBe("codex");
+    // settings stored before palettes existed carry no palette key
+    expect(sanitizeSettings({ theme: "light" }).palette).toBe("amber");
+    expect(sanitizeSettings({ palette: "charcoal" }).palette).toBe("charcoal");
+    expect(sanitizeSettings({ palette: "catppuccin" }).palette).toBe("catppuccin");
+    expect(sanitizeSettings({ palette: "pink" }).palette).toBe("amber");
+  });
+
+  it("loads a removed palette (report, lilac, forest) as amber", () => {
+    for (const removed of ["report", "lilac", "forest"]) expect(sanitizeSettings({ palette: removed }).palette).toBe("amber");
+  });
+
+  it("preserves Catppuccin through a saved settings round-trip and unrelated edits", () => {
+    const saved = sanitizeSettings({ palette: "catppuccin", theme: "dark" });
+    const reloaded = sanitizeSettings(JSON.parse(JSON.stringify(saved)));
+    expect(reloaded.palette).toBe("catppuccin");
+    expect(sanitizeSettings({ ...reloaded, theme: "light" }).palette).toBe("catppuccin");
+  });
+
+  // Every check below iterates the supported entries of src/lib/themes.generated.ts and reads each value from
+  // src/styles.css through the theme parser, never from generated data, so a new theme is checked with no edit here.
+  const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
+  const legacy = new Set([...Object.keys(baseline.combos), "catppuccin-latte/light"]);
+  const entries = SUPPORTED_ENTRIES.map(({ id, mode }) => ({ id, mode, key: `${id}/${mode}` }));
+  /** Runs one entry's checks; an unreadable theme value becomes a failure naming entry and role, not a crash. */
+  const checked = (failures: string[], check: () => void): void => {
+    try {
+      check();
+    } catch (error) {
+      if (!(error instanceof ThemeValueError)) throw error;
+      failures.push(error.message);
+    }
+  };
+
+  it("checks exactly the theme entries src/styles.css declares", () => {
+    expect(entries.map(({ key }) => key).sort()).toEqual(Object.keys(parseThemeBlocks(css)).sort());
+  });
+
+  it("gives every entry every theme role, declared in its own block for a new theme, with the mode's shadow geometry", () => {
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const own = parseThemeBlocks(css)[key]?.declared ?? {};
+        const { declared, resolved } = resolveEntry(css, id, mode);
+        for (const [role, kind] of Object.entries(ROLES)) {
+          if (resolved[`--${role}`] === undefined) failures.push(`${key} ${role}: missing`);
+          // the legacy entries inherit from the amber blocks as they always did; a new theme falls through to nothing
+          else if (!legacy.has(key) && own[`--${role}`] === undefined) failures.push(`${key} ${role}: not declared in its own block`);
+          if (kind !== "shadow" || resolved[`--${role}`] === undefined) continue;
+          // a whole-value alias names another shadow; any other target is not one
+          let value = declared[`--${role}`] ?? "";
+          for (let alias = /^var\((--[\w-]+)\)$/.exec(value); alias?.[1]; alias = /^var\((--[\w-]+)\)$/.exec(value)) value = declared[alias[1]] ?? "";
+          const shadow = parseThemeValue(key, role, value);
+          if (shadow.kind !== "shadow") throw new ThemeValueError(key, role, value, "not a shadow");
+          const geometry = shadow.layers.map((layer) => layer.geometry);
+          const fixed: readonly string[] = SHADOW_GEOMETRY[mode][role as keyof (typeof SHADOW_GEOMETRY)[typeof mode]];
+          if (geometry.join(", ") !== fixed.join(", ")) failures.push(`${key} ${role}: geometry ${geometry.join(", ")} is not ${mode}'s ${fixed.join(", ")}`);
+        }
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("parts every entry's control edges from its surfaces: --border differs from --bg-elevated, --bg-input and --border-strong", () => {
+    // the herdr mapping sets --bg-elevated, --bg-input and --border from one token, which hid select wells and row
+    // dividers; every legacy entry already differs, so no entry is excepted here
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const { resolved } = resolveEntry(css, id, mode);
+        for (const role of ["bg-elevated", "bg-input", "border-strong"]) {
+          if (resolved[`--${role}`] === resolved["--border"]) failures.push(`${key} ${role}: equals --border ${resolved["--border"]}`);
+        }
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  type Rgb = [number, number, number];
+  const luminance = (rgb: Rgb): number => {
+    const [r, g, b] = rgb.map((c) => (c / 255 <= 0.04045 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4)) as Rgb;
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: Rgb, b: Rgb): number => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  it("shows every entry's chosen segment: --bg-hover parts from its track (--bg-elevated, --bg-input in Settings) or --text-strong from --text-dim", () => {
+    // a segmented control fills the chosen option with --bg-hover on a track of --bg-elevated (--bg-input in Settings) and
+    // writes its label in --text-strong beside --text-dim labels; the herdr mapping and the AA repair collapsed both pairs in
+    // solarized-light, so no option looked chosen. The weakest pairs that still read set the floors: tokyo-night's label
+    // 1.31:1 on a 1.03:1 fill, tokyo-night-day's fill 1.11:1 under a 1.00:1 label
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const { resolved } = resolveEntry(css, id, mode);
+        const hex = (role: string): Rgb => {
+          const raw = resolved[`--${role}`] ?? "(missing)";
+          const parsed = parseThemeValue(key, role, raw);
+          const match = parsed.kind === "color" ? /^#([0-9a-f]{6})$/.exec(parsed.value) : null;
+          if (!match?.[1]) throw new ThemeValueError(key, role, raw, "not an opaque color");
+          return [0, 2, 4].map((i) => parseInt(match[1]!.slice(i, i + 2), 16)) as Rgb;
+        };
+        const fill = Math.min(ratio(hex("bg-hover"), hex("bg-elevated")), ratio(hex("bg-hover"), hex("bg-input")));
+        const label = ratio(hex("text-strong"), hex("text-dim"));
+        if (fill < 1.05 && label < 1.25) failures.push(`${key}: pressed fill ${fill.toFixed(2)}:1 on its track, pressed label ${label.toFixed(2)}:1 beside quiet labels`);
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("mirrors every entry's --term-* tokens of styles.css for the terminal and its --bg-panel for the title bar", () => {
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const { resolved } = resolveEntry(css, id, mode);
+        const expected = {
+          background: resolved["--term-bg"], foreground: resolved["--term-fg"], cursor: resolved["--term-cursor"], selectionBackground: resolved["--term-selection"],
+          ...(mode === "light" ? Object.fromEntries(Object.entries(LIGHT_ANSI_ROLES).map(([name, role]) => [name, resolved[`--${role}`]])) : {}),
+        };
+        let terminal: unknown;
+        try {
+          terminal = terminalTheme(mode, id as Parameters<typeof terminalTheme>[1]);
+        } catch (error) {
+          terminal = String(error);
+        }
+        if (JSON.stringify(terminal) !== JSON.stringify(expected)) failures.push(`${key} terminal: ${JSON.stringify(terminal)} is not ${JSON.stringify(expected)}`);
+        if (tableThemeColor(id, mode) !== resolved["--bg-panel"]) failures.push(`${key} theme-color: ${tableThemeColor(id, mode)} is not ${resolved["--bg-panel"]}`);
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("gives index.html and the web manifest the default theme's dark panel and page colors", () => {
+    expect(DEFAULT_ID).toBe(DEFAULT_THEME);
+    const { resolved } = resolveEntry(css, DEFAULT_THEME, "dark");
+    const metas: string[] = [];
+    new HTMLRewriter().on('meta[name="theme-color"]', { element: (meta) => void metas.push(meta.getAttribute("content") ?? "") })
+      .transform(readFileSync(join(import.meta.dir, "..", "..", "index.html"), "utf8"));
+    expect(metas).toEqual([resolved["--bg-panel"]!]);
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "public", "manifest.webmanifest"), "utf8"));
+    expect({ theme_color: manifest.theme_color, background_color: manifest.background_color }).toEqual({ theme_color: resolved["--bg-panel"], background_color: resolved["--bg"] });
+  });
+
+  it("declares all sixteen readable ANSI colours only in light rows and passes them to the terminal", () => {
+    const failures: string[] = [];
+    const blocks = parseThemeBlocks(css);
+    const hex = (value: string): Rgb => {
+      if (!/^#[0-9a-f]{6}$/.test(value)) throw new ThemeValueError("ANSI", "color", value, "not an opaque color");
+      return [parseInt(value.slice(1, 3), 16), parseInt(value.slice(3, 5), 16), parseInt(value.slice(5, 7), 16)];
+    };
+    expect(Object.keys(LIGHT_ANSI_ROLES)).toHaveLength(16);
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const own = blocks[key]?.declared ?? {};
+        const { resolved } = resolveEntry(blocks, id, mode);
+        const terminal = terminalTheme(mode, id);
+        for (const [name, role] of Object.entries(LIGHT_ANSI_ROLES)) {
+          const token = `--${role}`;
+          if (mode === "dark") {
+            if (own[token] !== undefined || Object.hasOwn(terminal, name)) failures.push(`${key} ${role}: dark ANSI override`);
+            continue;
+          }
+          if (own[token] === undefined) failures.push(`${key} ${role}: missing own declaration`);
+          const value = resolved[token] ?? "(missing)";
+          const contrast = ratio(hex(value), hex(resolved["--term-bg"] ?? "(missing)"));
+          if (contrast < 4.5) failures.push(`${key} ${role}: ${contrast}:1 on term-bg`);
+          if (Reflect.get(terminal, name) !== value) failures.push(`${key} ${role}: not passed to the terminal`);
+        }
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps text, agent states and code readable (WCAG AA 4.5:1) on every surface of every entry", () => {
+    const over = ([rgb, alpha]: [Rgb, number], under: Rgb): Rgb => rgb.map((c, i) => c * alpha + under[i]! * (1 - alpha)) as Rgb;
+    const failures: string[] = [];
+    for (const { id, mode, key } of entries) {
+      checked(failures, () => {
+        const { resolved } = resolveEntry(css, id, mode);
+        // the committed value through the theme value parser: an unexpected form is named, never a null match
+        const rgba = (role: string): [Rgb, number] => {
+          const raw = resolved[`--${role}`] ?? "(missing)";
+          const parsed = parseThemeValue(key, role, raw);
+          const value = parsed.kind === "color" ? parsed.value : "";
+          const hex = /^#([0-9a-f]{6})$/.exec(value);
+          if (hex?.[1]) return [[0, 2, 4].map((i) => parseInt(hex[1]!.slice(i, i + 2), 16)) as Rgb, 1];
+          const parts = /^rgba\((\d+), (\d+), (\d+), ([\d.]+)\)$/.exec(value);
+          if (!parts) throw new ThemeValueError(key, role, raw);
+          return [[Number(parts[1]), Number(parts[2]), Number(parts[3])], Number(parts[4])];
+        };
+        const color = (role: string, under: Rgb = [0, 0, 0]): Rgb => over(rgba(role), under);
+        // a field's placeholder is --text-dim on --bg-input (src/styles.css ::placeholder)
+        const input = color("bg-input");
+        if (ratio(color("text-dim", input), input) < 4.5) failures.push(`${key} placeholder (text-dim) on bg-input`);
+        for (const surface of ["bg", "bg-panel", "bg-elevated", "bg-hover"]) {
+          const ground = color(surface);
+          for (const text of ["text", "text-dim"]) {
+            if (ratio(color(text, ground), ground) < 4.5) failures.push(`${key} ${text} on ${surface}`);
+          }
+          // a status badge: its color on its tint, over a (hovered or selected) row
+          for (const state of ["working", "blocked", "done"]) {
+            const backdrop = over(rgba(`status-${state}-tint`), ground);
+            if (ratio(color(`status-${state}`, backdrop), backdrop) < 4.5) failures.push(`${key} ${state} badge on ${surface}`);
+          }
+        }
+        // a primary control's label on its own fill (.btn-primary)
+        const fill = color("primary");
+        if (ratio(color("primary-text", fill), fill) < 4.5) failures.push(`${key} primary-text on primary`);
+        // highlighted code sits on the panel (a file preview) or an elevated card (a chat code block)
+        for (const surface of ["bg-panel", "bg-elevated"]) {
+          const ground = color(surface);
+          for (const token of ["function", "keyword", "string", "number", "type", "variable", "meta"]) {
+            if (ratio(color(`syntax-${token}`, ground), ground) < 4.5) failures.push(`${key} syntax-${token} on ${surface}`);
+          }
+        }
+      });
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("paints amber before settings load: the base blocks are the default palette's", () => {
+    const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
+    const root = css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")));
+    expect(root).toContain(`--term-bg: ${terminalTheme("dark").background};`);
+    expect(root).toContain(`--term-cursor: ${terminalTheme("dark").cursor};`);
+    expect(terminalTheme("dark")).toEqual(terminalTheme("dark", "amber"));
+  });
+});
+
+describe("agent marks", () => {
+  it("drops the icon choice 0.3.36 stored, so every pane shows its provider logo", () => {
+    const settings = sanitizeSettings({ claudeMark: "mascot", codexMark: "app" });
+    expect(settings).not.toHaveProperty("claudeMark");
+    expect(settings).not.toHaveProperty("codexMark");
+  });
+});
+
+it("sanitizes input modes and shortcut overrides without accepting arbitrary commands", () => {
+  expect(sanitizeSettings({ terminalInputMode: "bad" }).terminalInputMode).toBe("auto");
+  expect(sanitizeSettings({ terminalInputMode: "line" }).terminalInputMode).toBe("line");
+  expect(sanitizeSettings({ shortcutOverrides: { palette: "p", settings: null, voice: "x", unknown: "x", "next-pane": "rm -rf" } }).shortcutOverrides).toEqual({ palette: "p", settings: null });
+});
+
+describe("key bar settings", () => {
+  it("uses the new default for fresh partial records and migrates explicit legacy records", () => {
+    expect(DEFAULT_SETTINGS.keyBarItems).toEqual(DEFAULT_KEY_BAR_ITEMS);
+    expect(sanitizeSettings({}).keyBarItems).toEqual(DEFAULT_KEY_BAR_ITEMS);
+    expect(sanitizeSettings({ theme: "light" }).keyBarItems).toEqual(DEFAULT_KEY_BAR_ITEMS);
+    expect(sanitizeSettings({ keyBarExtras: ["alt"] }).keyBarItems).toEqual(migrateKeyBarItems(["alt"]));
+    expect(sanitizeSettings({ keyBarExtras: ["home-end", "slash", "unknown"] }).keyBarItems).toEqual(migrateKeyBarItems(["home-end", "slash"]));
+    expect(sanitizeSettings({ keyBarExtras: [], keyBarItems: [] }).keyBarItems).toEqual([]);
+    expect(sanitizeSettings({ keyBarExtras: ["alt"], keyBarItems: [] }).keyBarItems).toEqual([]);
+    expect(sanitizeSettings({ keyBarExtras: [], keyBarItems: "bad" }).keyBarItems).toEqual(migrateKeyBarItems([]));
+  });
+
+  it("preserves a custom chord and new order through a saved settings round-trip and unrelated edits", () => {
+    const settings = sanitizeSettings({ keyBarExtras: ["alt"], keyBarItems: [
+      { type: "key", key: "ArrowLeft", modifiers: { ctrl: true, alt: true, shift: false } },
+      { type: "modifier", modifier: "shift" }, { type: "key", key: "Enter" },
+    ] });
+    const reloaded = sanitizeSettings(JSON.parse(JSON.stringify(settings)));
+    expect(reloaded.keyBarItems).toEqual(settings.keyBarItems);
+    expect(sanitizeSettings({ ...reloaded, theme: "light" }).keyBarItems).toEqual(settings.keyBarItems);
+    expect(settings.keyBarItems.map((item) => item.type === "modifier" ? item.modifier : item.key)).toEqual(["ArrowLeft", "shift", "Enter"]);
+  });
+});
+
+describe("default lens", () => {
+  it("keeps only a known choice, auto by default", () => {
+    expect(DEFAULT_SETTINGS.defaultView).toBe("auto");
+    expect(sanitizeSettings({ defaultView: "chat" }).defaultView).toBe("chat");
+    expect(sanitizeSettings({ defaultView: "split" }).defaultView).toBe("auto");
+  });
+});
+
+it("keeps the file viewer's wrap setting only when it is a boolean", () => {
+  expect(DEFAULT_SETTINGS.wrapCode).toBe(false);
+  expect(sanitizeSettings({ wrapCode: true }).wrapCode).toBe(true);
+  expect(sanitizeSettings({ wrapCode: "yes" }).wrapCode).toBe(false);
+});
+
+it("keeps the Markdown preview's width to readable or full, readable by default", () => {
+  expect(DEFAULT_SETTINGS.markdownWidth).toBe("readable");
+  for (const width of MARKDOWN_WIDTHS) expect(sanitizeSettings({ markdownWidth: width }).markdownWidth).toBe(width);
+  for (const bad of ["narrow", "medium", "wide", "", null, 80]) expect(sanitizeSettings({ markdownWidth: bad }).markdownWidth).toBe("readable");
+});
+
+it("keeps where web links open to a tab or the panel, a tab by default", () => {
+  expect(DEFAULT_SETTINGS.webLinks).toBe("tab");
+  expect(DEFAULT_SETTINGS.fileOpen).toBe("popup");
+  expect(sanitizeSettings({ fileOpen: "panel" }).fileOpen).toBe("panel");
+  for (const bad of ["tab", "", null, true]) expect(sanitizeSettings({ fileOpen: bad }).fileOpen).toBe("popup");
+  expect(sanitizeSettings({ webLinks: "panel" }).webLinks).toBe("panel");
+  for (const bad of ["popup", "", null, true]) expect(sanitizeSettings({ webLinks: bad }).webLinks).toBe("tab");
+  // an agent's start mode never widens by accident: anything unknown starts it with no flag
+  expect(DEFAULT_SETTINGS.claudeLaunchMode).toBe("default");
+  expect(DEFAULT_SETTINGS.codexLaunchMode).toBe("default");
+  expect(sanitizeSettings({ claudeLaunchMode: "plan", codexLaunchMode: "readOnly" })).toMatchObject({ claudeLaunchMode: "plan", codexLaunchMode: "readOnly" });
+  for (const bad of ["bypass", "BypassPermissions", "full-access", "", null, 1, ["auto"]]) {
+    expect(sanitizeSettings({ claudeLaunchMode: bad }).claudeLaunchMode).toBe("default");
+    expect(sanitizeSettings({ codexLaunchMode: bad }).codexLaunchMode).toBe("default");
+  }
+});
+
+describe("shared settings", () => {
+  it("shares exactly the settings SETTING_SCOPE marks shared", () => {
+    const shared = Object.entries(SETTING_SCOPE).filter(([, scope]) => scope === "shared").map(([key]) => key).sort();
+    expect([...SHARED_SETTING_KEYS].sort() as string[]).toEqual(shared);
+    expect(Object.keys(SETTING_SCOPE).sort()).toEqual(Object.keys(DEFAULT_SETTINGS).sort());
+  });
+});
+

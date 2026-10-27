@@ -1,0 +1,60 @@
+name: Release
+# A vX.Y.Z tag publishes that GitHub release, with its CHANGELOG.md section as the notes and the
+# Mac app (mac-app.yml) as T-Rex-X.Y.Z-arm64.zip with its SHA256SUMS.txt; GitHub adds the source
+# archives. The tag must name the version package.json and herdr-plugin.toml carry.
+# docs/development.md#releases says how to cut one.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+permissions:
+  contents: read
+jobs:
+  notes:
+    name: Match the tag against the version and take its notes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Match the tag against the version and take its notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(jq -r .version package.json)
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$TAG" = "v$version" ] || fail "Tag $TAG does not name package.json's version $version"
+          grep -qx "version = \"$version\"" herdr-plugin.toml || fail "herdr-plugin.toml does not carry version $version"
+          awk -v head="## [$version]" 'index($0, head) == 1 { found = 1; next } found && /^## \[/ { exit } found' CHANGELOG.md > notes.md
+          grep -q '[^[:space:]]' notes.md || fail "CHANGELOG.md has no ## [$version] section to publish as the notes"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: notes.md
+          if-no-files-found: error
+  mac:
+    name: Mac app
+    needs: notes
+    uses: ./.github/workflows/mac-app.yml
+  publish:
+    name: Publish the release
+    needs: [notes, mac]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+      - uses: actions/download-artifact@v8
+        with:
+          name: T-Rex-mac-arm64
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          zip="T-Rex-${TAG#v}-arm64.zip"
+          mv T-Rex-arm64.zip "$zip"
+          sha256sum "$zip" > SHA256SUMS.txt
+          gh release create "$TAG" --verify-tag --title "T-Rex ${TAG#v}" --notes-file notes.md "$zip" SHA256SUMS.txt

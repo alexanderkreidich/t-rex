@@ -1,0 +1,14 @@
+/* T-Rex for the Mac (macos/): the window has no title bar, and its buttons sit at the top bar's left
+   end, centred on it (TRexWindowController). The app says how far they reach (--trex-mac-reserve);
+   the bar keeps that much clear, as styles.css does for Chrome's window controls overlay. */
+html[data-trex-mac] .app-header {
+  padding-left: calc(var(--space-3) + var(--trex-mac-reserve, 0px));
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@media (min-width: 769px) {
+  html[data-trex-mac] .app:not(.sidebar-collapsed) .header-side {
+    padding-left: calc(var(--space-3) + var(--trex-mac-reserve, 0px));
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "files": [
+    "scripts/herdr-themes.ts",
+    "scripts/herdr-theme-proposal.ts",
+    "scripts/herdr-theme-overrides.ts",
+    "scripts/herdr-themes.test.ts",
+    "scripts/check.ts",
+    "scripts/sandbox.ts",
+    "scripts/i18n-keys.ts",
+    "scripts/i18n-prune.ts",
+    "scripts/minimal-ui-regression.ts",
+    "scripts/restty-regression.ts",
+    "scripts/kitty-graphics-regression.ts",
+    "scripts/terminal-performance.ts",
+    "scripts/terminal-input-regression.ts",
+    "scripts/terminal-ipad-ime-regression.ts",
+    "scripts/terminal-safari-ime-regression.ts",
+    "scripts/terminal-pinch-regression.ts",
+    "scripts/terminal-viewport-regression.ts",
+    "scripts/pane-find-regression.ts",
+    "scripts/ci-lanes.ts",
+    "scripts/ci-tests.ts",
+    "demo/transport.ts",
+    "scripts/build-remote-bundle.ts",
+    "scripts/build-mac-app.ts",
+    "scripts/mac-app-smoke.ts",
+    "scripts/ssh-integration.ts",
+    "scripts/lan-exposure-notice-regression.ts",
+    "scripts/application-paging-regression.ts",
+    "scripts/omo-question-wheel-regression.ts"
+  ],
+  "include": []
+}

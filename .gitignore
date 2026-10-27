@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.log
+.env
+evidence/
+.omo/
+.gjc/
+# images pasted into a pane (server/paste.ts); .herdr-web-ui/ from before the rename
+.t-rex/
+.herdr-web-ui/
+# a check run's herdr config and state, when CHECK_DIR keeps it in the checkout (scripts/check.ts)
+.ci/
+.ci-cache/
+
+remote-bundles/
+
+# one-off screenshot and probe scripts kept inside the repo so imports resolve
+scripts/*.tmp.ts
+
+macos/.build/
+macos/build/
