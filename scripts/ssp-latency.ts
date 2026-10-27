@@ -126,7 +126,8 @@ async function measure(delay: number): Promise<{ first: number; rest: number; ma
     await context.addInitScript(() => localStorage.setItem("t-rex:settings", JSON.stringify({ language: "en" })));
     const page = await context.newPage();
     await page.goto(`http://127.0.0.1:${link.port}/`);
-    await page.locator(`.workspace-group[data-workspace="${workspaceId}"] .workspace-select`).click();
+    // in focus mode, the default, a workspace's row folds its tabs: a tab row opens the pane
+    await page.locator(`.workspace-group[data-workspace="${workspaceId}"] .workspace-tab-select`).first().click();
     const input = page.locator(".pane-frame.is-current .terminal-ime").first();
     await input.waitFor({ state: "attached", timeout: 20_000 });
     // input is ready once the shell's prompt is there and nothing waits on the terminal

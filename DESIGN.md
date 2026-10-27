@@ -2016,6 +2016,7 @@ The values are the ones in `src/styles.css`.
 | Spring easing | `--ease-spring` | `cubic-bezier(0.32, 0.72, 0, 1)` | A phone's sheet rising and springing back; the sidebar sliding |
 | Sheet in | `--dur-sheet` | `360ms` | A phone's sheet rising, and springing back after a short drag |
 | Sheet out | `--dur-sheet-out` | `240ms` | A phone's sheet dropping, however it closed |
+| Fold | `--dur-fold` | `420ms` | The sidebar's folds on `--ease-spring`: a workspace's tab rows and worktrees sliding up under its row and back down, the rows below with them, and its chevron turning. Picked by eye, over the 300ms the rest keeps to |
 
 ### Rules
 - Only state changes move: hover/press, the drawer, a phone's sheets, settings switches, working and
@@ -2028,8 +2029,10 @@ The values are the ones in `src/styles.css`.
   `+` to 0.95, a tab to 0.97, over `--dur-fast`. A row menu grows from the corner nearest what
   opened it (`--dur-base`). A tab that arrives while its workspace is open grows in. From `769px`
   the sidebar slides in and out (`--dur-modal` on `--ease-spring`); the pane column takes its new
-  width once. Nothing a shortcut opens or toggles animates (`data-key-action`,
-  `lib/shortcuts.ts`). Rules for new motion: AGENTS.md, UX and motion.
+  width once. A fold in the sidebar slides what it hides up under its row (`--dur-fold`,
+  `lib/foldMotion.ts`, transform and opacity only); a fold by key changes at once. Nothing a
+  shortcut opens or toggles animates (`data-key-action`, `lib/shortcuts.ts`). Rules for new
+  motion: AGENTS.md, UX and motion.
 - `prefers-reduced-motion: reduce` removes pulses, drawer/control transitions, sheet rise and drop,
   smooth chat scrolling and settings toggle motion; a drag still follows the finger. State remains legible without animation.
   One exception: the sidebar's RUN dot keeps its stepped breath, opacity only and nothing moving,

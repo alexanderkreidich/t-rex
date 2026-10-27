@@ -42,7 +42,10 @@ The visible UI shrinks to a workspace list, one top bar of pill tabs and the ter
       workspace's rows, it goes into that workspace (`POST /api/tab/transfer`: herdr's `pane.move`
       carries each pane over with its shell, and the split layout with them; a workspace's last tab
       leaves a new shell behind, so the workspace stays). A hidden sidebar hands the tabs back to
-      the bar. A split view's halves keep their own strips.
+      the bar. A split view's halves keep their own strips. A workspace's row, or the chevron that
+      leads it, folds its tab rows and its worktrees under it (Alt-click: every row; ←/→ and
+      Enter by key, at once): they slide up under the row (420ms, transform and opacity only),
+      and the row says how many it holds and the state of the most urgent.
 - [x] **PC switcher.** The sidebar shows one PC at a time. Its top row is a switcher (the PC's
       mark and name, a chevron with a point when another PC waits on you) whose menu lists the
       PCs, Manage for an SSH PC and Add PC, and a `+` for a new workspace at the row's far edge.
