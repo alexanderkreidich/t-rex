@@ -160,9 +160,10 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     if (payload instanceof Response) return payload;
     if (typeof payload.pane_id !== "string" || !payload.pane_id.trim()) return badRequest("missing_pane_id", "pane_id is required");
     try {
-      // herdr emits pane.closed -> the collector broadcasts session-changed, so
-      // every client refetches and the pane leaves sidebars on its own
+      // every client reads the roster again now: the collector would say it only after herdr's
+      // pane.closed and its own debounce, and the closed pane's card would stay that long
       await paneClose(payload.pane_id);
+      broadcastAll({ type: "session-changed" });
       return jsonResponse({ ok: true });
     } catch (error) {
       return errorResponse(error);
