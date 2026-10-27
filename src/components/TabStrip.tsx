@@ -257,6 +257,9 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     // commit must already know where the disappearing tab's keyboard focus belongs.
     const focusAfterClose = beside ? { tabId: tab.tab_id, beside: beside.tab_id } : null;
     if (focusAfterClose) closed.current = focusAfterClose;
+    // the open tab goes at once, its terminal with it: the tab beside it opens before herdr answers
+    const besidePane = beside ? paneFor(beside) : undefined;
+    if (latest.current.tabId === tab.tab_id && besidePane) onSelectPane(besidePane.pane_id);
     try { await closeTab(tab.tab_id); }
     catch (reason) {
       if (closed.current === focusAfterClose) closed.current = null;
@@ -266,8 +269,6 @@ export function TabStrip({ snapshot, workspace, selectedPane, onSelectPane, onNe
     if (latest.current.machineId !== machineId || latest.current.workspaceId !== workspace.workspace_id) return;
     // the last tab took its workspace, and the strip, with it: focus goes where a closed row's goes
     if (!beside) { focusWorkspaceListToggle(); return; }
-    const pane = paneFor(beside);
-    if (latest.current.tabId === tab.tab_id && pane) onSelectPane(pane.pane_id);
     if (strip.current?.contains(document.activeElement) || document.activeElement === document.body) focusTab(beside.tab_id);
   };
   const requestClose = (tab: HerdrTab): void => {

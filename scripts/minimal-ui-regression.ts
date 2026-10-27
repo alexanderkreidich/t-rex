@@ -10,7 +10,7 @@
  * Each pane is a rounded card whose title bar carries Split right, Split down, Zoom and Close (a
  * split from there is drawn at the click, before herdr's layout); a card dragged by its title onto
  * another of its tab trades places with it in herdr. Mod+D from the
- * terminal splits its pane right.
+ * terminal splits its pane right, and a card's X closes its pane at the click.
  *
  *   bun run build && bun run check run bun scripts/minimal-ui-regression.ts
  */
@@ -225,6 +225,15 @@ try {
   await cards.nth(0).locator(".terminal-ime").focus();
   await page.keyboard.press(`${mod}+d`);
   await cards.nth(2).waitFor({ timeout: 10_000 });
+  // a card closed by its X goes at the click, its neighbour taking its place, before the bridge can answer
+  const closedAtClick = await cards.nth(2).evaluate(async (frame) => {
+    const id = (frame as HTMLElement).dataset["layoutPane"]!;
+    frame.querySelector<HTMLElement>('.pane-frame-actions button[aria-label="Close pane"]')!.click();
+    for (let i = 0; i < 3; i++) await Promise.resolve();
+    return { id, shown: document.querySelectorAll(".pane-frame[data-layout-pane]:not(.is-hidden)").length, still: document.querySelector(`.pane-frame[data-layout-pane="${id}"]`) !== null };
+  });
+  assert.deepEqual([closedAtClick.shown, closedAtClick.still], [2, false], "the closed card is gone at the click");
+  await page.waitForFunction(async (id) => !(await (await fetch("/api/session")).json()).snapshot.panes.some((pane: { pane_id: string }) => pane.pane_id === id), closedAtClick.id, { timeout: 10_000 });
 
   // the top row's + makes a workspace at once and opens it: a shell in home, no dialog asking for an agent or a folder
   const known = await page.locator(".workspace-group[data-workspace]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-workspace")));

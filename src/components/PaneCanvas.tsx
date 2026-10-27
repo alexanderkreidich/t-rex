@@ -9,7 +9,7 @@ import { PaneCachedContext, PanePresentedContext, PaneShownContext, PaneSubmitCo
 import { cachedPaneCells, visitPaneTab } from "../lib/paneTabCache.ts";
 import { routeMissing } from "../lib/api.ts";
 import { layoutCells, zoomMode } from "../lib/layoutMap.ts";
-import { cardPlace, layoutTopology, paneContextPress, paneFieldTarget, SOLO_PANE_QUERY, soloPane, splitAsk, splitCells, splitPath, splitPending, splitRatioAt, swappedCells, swapPending, type PaneSplitAsk, type PaneSwap } from "../lib/paneCanvas.ts";
+import { cardPlace, closeAsk, closedCells, closePending, layoutTopology, paneContextPress, paneFieldTarget, SOLO_PANE_QUERY, soloPane, splitAsk, splitCells, splitPath, splitPending, splitRatioAt, swappedCells, swapPending, type PaneCloseAsk, type PaneSplitAsk, type PaneSwap } from "../lib/paneCanvas.ts";
 import { folderName } from "../lib/paneName.ts";
 import { customTabLabel } from "../lib/tabName.ts";
 import { useT } from "../lib/i18n.ts";
@@ -31,6 +31,8 @@ const SORT_START_PX = 4;
 const SWAP_WAIT_MS = 5000;
 /** how long a split's halves are drawn without herdr's layout saying so */
 const SPLIT_WAIT_MS = 5000;
+/** how long a closed pane is drawn gone without herdr's layout saying so */
+const CLOSE_WAIT_MS = 5000;
 
 /** A motion token of src/styles.css, for an animation run from script (the Web Animations API). */
 const token = (name: string): string => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -174,6 +176,8 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   // the halves herdr's layout will have, drawn at the click, before that layout reaches the browser;
   // `pane` is the split's new pane once herdr has answered with it
   const [ask, setAsk] = useState<(PaneSplitAsk & { pane?: HerdrPane }) | null>(null);
+  // a pane closed from its card, drawn gone (its terminal with it) before herdr's layout says so
+  const [gone, setGone] = useState<PaneCloseAsk | null>(null);
   const seenPanes = useRef<{ tabId: string | undefined; ids: ReadonlySet<string> } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const fail = (reason: unknown): void => {
@@ -226,7 +230,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     const selection = latest.current.selection;
     splitting.current = { tabId: target.tab_id, direction, grown: null };
     // where both halves are drawn, they are drawn now, in herdr's own proportions
-    const halves = layout && !layout.zoomed && !narrow && !swapShown && !ask ? splitAsk(layout, target.pane_id, direction) : null;
+    const halves = layout && !layout.zoomed && !narrow && !swapShown && !ask && !goneShown ? splitAsk(layout, target.pane_id, direction) : null;
     if (halves) setAsk(halves);
     const made = await api.splitPane(target.pane_id, direction, true).catch((reason: unknown) => {
       splitting.current = null;
@@ -242,10 +246,35 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     await api.zoomPane(target.pane_id, layout ? zoomMode(layout, target.pane_id) : "on");
     if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(target.pane_id);
   });
+  // A pane closed from its card goes at once, and its terminal with it: its neighbours take the
+  // places herdr gives them, and the open one's place opens its heir. A tab's last pane takes the
+  // tab with it, and the tab beside it opens.
+  const closeNow = (target: HerdrPane): void => {
+    const asked = layout && !layout.zoomed && !narrow && !swapShown && !splitShown && !gone ? closeAsk(layout, target.pane_id) : null;
+    if (asked) setGone(asked);
+    if (target.pane_id === selectedPaneId) {
+      const heir = asked?.heir ?? besideTabPane(target);
+      if (heir) onSelect(heir);
+    }
+    run(() => api.closePane(target.pane_id).catch((reason: unknown) => {
+      setGone((current) => current === asked ? null : current);
+      throw reason;
+    }));
+  };
+  /** the pane the tab beside a pane's own opens on, when that pane is its tab's only one */
+  const besideTabPane = (target: HerdrPane): string | null => {
+    if (!snapshot || snapshot.panes.some((item) => item.tab_id === target.tab_id && item.pane_id !== target.pane_id)) return null;
+    const tabs = snapshot.tabs.filter((tab) => tab.workspace_id === target.workspace_id);
+    const at = tabs.findIndex((tab) => tab.tab_id === target.tab_id);
+    const beside = tabs[at + 1] ?? tabs[at - 1];
+    if (!beside) return null;
+    return snapshot.layouts.find((item) => item.tab_id === beside.tab_id)?.focused_pane_id
+      ?? snapshot.panes.find((item) => item.tab_id === beside.tab_id)?.pane_id ?? null;
+  };
   const requestClose = (target: HerdrPane): void => {
     const inWorkspace = snapshot?.panes.filter((item) => item.workspace_id === target.workspace_id).length ?? 1;
     if (inWorkspace === 1 || target.agent_status === "working" || target.agent_status === "blocked") setClosing(target);
-    else run(() => api.closePane(target.pane_id));
+    else closeNow(target);
   };
   const target = menu ? snapshot?.panes.find((item) => item.pane_id === menu.paneId) : null;
   const itemsFor = (target: HerdrPane): RowMenuItem[] => [
@@ -304,16 +333,17 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const laid = layout ? layoutCells(layout) : pane ? [{ paneId: pane.pane_id, left: 0, top: 0, width: 100, height: 100, focused: true }] : [];
   const swapShown = swapPending(laid, swap, layout?.tab_id);
   const splitShown = splitPending(laid, ask, layout?.tab_id);
+  const goneShown = closePending(laid, gone, layout?.tab_id);
   // herdr has answered with the split's pane: its own card is drawn in its place and its terminal
   // attaches now, before herdr's layout lists it; the same keyed card goes on from there
   const madeCell = splitShown && ask.pane ? [{ paneId: ask.pane.pane_id, focused: false, ...ask.made }] : [];
-  const cells = [...splitCells(swappedCells(laid, swap, layout?.tab_id), ask, layout?.tab_id), ...madeCell];
+  const cells = [...closedCells(splitCells(swappedCells(laid, swap, layout?.tab_id), ask, layout?.tab_id), gone, layout?.tab_id), ...madeCell];
   // the split's new pane is one of the cards before herdr's layout lists it
   const cardCount = cells.length + (splitShown && !ask.pane ? 1 : 0);
   const alone = soloPane(layout, cells.map((cell) => cell.paneId), selectedPaneId, narrow);
   const stacked = alone !== null && !layout?.zoomed;
   // a tab's panes trade places by their titles where they are drawn side by side, with a mouse
-  const sortable = !coarse && alone === null && cells.length > 1 && !swapShown && !splitShown;
+  const sortable = !coarse && alone === null && cells.length > 1 && !swapShown && !splitShown && !goneShown;
 
   const measure = (): Map<string, DOMRect> => {
     const boxes = new Map<string, DOMRect>();
@@ -341,6 +371,14 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     const timer = setTimeout(() => setAsk(null), SPLIT_WAIT_MS);
     return () => clearTimeout(timer);
   }, [ask]);
+  // herdr's layout has dropped the closed pane (or moved on): its own cells are drawn from here
+  useEffect(() => { if (gone && !goneShown) setGone(null); }, [gone, goneShown]);
+  // no layout without it from herdr: the pane comes back where herdr still has it
+  useEffect(() => {
+    if (!gone) return;
+    const timer = setTimeout(() => setGone(null), CLOSE_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [gone]);
   // The canvas's motion, played once the new places are drawn and before they are painted. A move
   // animates transform alone: each card is laid out at its new place once (one pty resize) and plays
   // from where it was. A pane that joins the tab on screen grows in from the side it split from,
@@ -634,7 +672,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     {renaming && <PaneRename pane={renaming} onClose={() => setRenaming(null)} onSave={async (label) => { await api.renamePane(renaming.pane_id, label); onChanged(); }} />}
     {closing && <ConfirmDialog title={t("Close pane {name}?", { name: displayPaneTitle(closing) })}
       body={t("The pane's running processes will stop. Closing its last pane also closes the workspace.")}
-      confirmLabel={t("Close pane")} onClose={() => setClosing(null)} onConfirm={async () => { await api.closePane(closing.pane_id); setClosing(null); onChanged(); }} />}
+      confirmLabel={t("Close pane")} onClose={() => setClosing(null)} onConfirm={async () => { setClosing(null); closeNow(closing); }} />}
   </div></PaneSubmitContext.Provider>;
 }
 
