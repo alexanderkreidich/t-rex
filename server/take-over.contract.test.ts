@@ -221,3 +221,19 @@ describe("explicit take-over intent", () => {
     expect(f.frames.filter((m) => m.type === "pty-data").map((m) => m.data).join("")).toContain("terminal attach taken over");
   }, 20_000);
 });
+
+describe("a fresh attach", () => {
+  it("is ready as soon as its screen begins, not after the hold kept for a refusal", async () => {
+    // a hold far longer than the test's wait: only a screen let through at once is ready in time
+    const f = await fixture([{ kind: "real" }], 5_000);
+    await until(() => f.frames.some((m) => m.type === "input-ready" && m.pane_id === f.paneId), "input ready before the hold ends", 2_000);
+  }, 20_000);
+
+  it("still holds a contested pane's screen until the hold ends", async () => {
+    const f = await fixture([{ kind: "held" }, { kind: "real" }], 1_000);
+    await until(() => f.starts().length === 2, "the retry after the other bridge let go");
+    const started = Date.now();
+    await until(() => f.frames.some((m) => m.type === "attach-resumed"), "the retry settles");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  }, 20_000);
+});

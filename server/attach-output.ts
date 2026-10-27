@@ -7,6 +7,21 @@ const TEARDOWN = "\x1b[?1049l\x1b[?25h\x1b[0 q";
 const DIAGNOSTIC = TEARDOWN + "herdr: ";
 const TAKEN = DIAGNOSTIC + "server shut down: terminal attach taken over";
 
+/** herdr's own words on stderr: how it refuses an attach, and how an attach that ends says why. */
+const HERDR_WORDS = "herdr: ";
+/** an attach's setup at the start of its output: terminal modes set or reset, cursor styles */
+const SETUP_RE = /^(?:\x1b\[(?:\?[\d;]+[hl]|\d* q))*/;
+
+/**
+ * Whether an attach's first output past its setup may still be herdr refusing it (another client
+ * has the terminal, a read in progress): a refusal is herdr's own words after the setup, while
+ * a screen starts with anything else, its first escape sequence most often.
+ */
+export function mayBeRefusal(output: string): boolean {
+  const rest = output.replace(SETUP_RE, "");
+  return rest.startsWith(HERDR_WORDS) || HERDR_WORDS.startsWith(rest);
+}
+
 /** The attach's own final diagnostic, not these words in the pane's screen. */
 export function isTakeoverExit(output: string): boolean {
   return output.trimEnd().endsWith(TAKEN);
