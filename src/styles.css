@@ -205,6 +205,9 @@
   /* a phone's sheet rises on the spring and drops faster than it rose */
   --dur-sheet: 360ms;
   --dur-sheet-out: 240ms;
+  /* the sidebar's folds (lib/foldMotion.ts) slide on the spring, slow enough to follow the rows
+     under their workspace: picked by eye, over the 300ms the rest of the UI keeps to */
+  --dur-fold: 420ms;
 
   /* layers */
   --z-header: 4;

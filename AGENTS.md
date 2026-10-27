@@ -82,7 +82,8 @@ UI piece behind a switcher before committing to one).
   tab or pane switching by key, focus moves): no animation. Tens a day (hover, press): near
   imperceptible. Occasional (menus, dialogs, sidebar, a new tab): standard.
 - Durations: press 100–160ms, tooltips and small popovers 125–200ms, menus 150–250ms, dialogs
-  and drawers 200–300ms. Nothing in the UI over 300ms.
+  and drawers 200–300ms. Nothing in the UI over 300ms, except the sidebar's folds (`--dur-fold`,
+  420ms, picked by eye) and a phone's sheet (`--dur-sheet`).
 - Easing: entering and exiting `ease-out`, moving on screen `ease-in-out`, colour and hover
   `ease`; never `ease-in`. Use the tokens in `src/styles.css` (`--ease-out`, `--ease-in-out`,
   `--ease-spring` for drawers, `--dur-*`), never an ad-hoc curve.

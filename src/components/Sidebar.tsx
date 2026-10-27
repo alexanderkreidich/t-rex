@@ -26,6 +26,7 @@ import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { useWorktreeBranches } from "../lib/useWorktreeBranches.ts";
 import { watchTouchReorder } from "../lib/touchReorder.ts";
 import { useTabRowDrag } from "../lib/useTabRowDrag.ts";
+import { captureFold, playFold, type FoldCapture, type FoldMotion } from "../lib/foldMotion.ts";
 import { placeBlock, workspaceMoves, worktreeGroups as groupWorktrees } from "../lib/workspaceOrder.ts";
 import { worktreeLabel } from "../lib/worktreeName.ts";
 import { lastViewedPane, rememberViewedPane } from "../lib/lastViewedPane.ts";
@@ -38,10 +39,12 @@ import { currentSidebarPins, pinnedGroupIds, pinnedWorkspaceIds, pruneWorkspaceP
 const ERROR_NOTE_MS = 5000;
 
 const worktreeCollapsedKey = (machineId: string, repoKey: string) => `t-rex:worktree-group-collapsed:${machineId}:${repoKey}`;
-function storedWorktreeCollapsed(machineId: string, repoKeys: string[]): Set<string> {
+// focus mode: a workspace whose tab rows are folded under its row
+const tabsCollapsedKey = (machineId: string, workspaceId: string) => `t-rex:workspace-tabs-collapsed:${machineId}:${workspaceId}`;
+function storedCollapsed(keyOf: (id: string) => string, ids: string[]): Set<string> {
   const collapsed = new Set<string>();
   try {
-    for (const key of repoKeys) if (localStorage.getItem(worktreeCollapsedKey(machineId, key)) === "1") collapsed.add(key);
+    for (const id of ids) if (localStorage.getItem(keyOf(id)) === "1") collapsed.add(id);
   } catch { /* storage denied: nothing is folded */ }
   return collapsed;
 }
@@ -212,7 +215,15 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
   const rosterId = useId();
   const workspaceRoot = useRef<HTMLDivElement>(null);
   const revealOpenedWorkspace = useRef<string | null>(null);
-  const [collapsedWorktrees, setCollapsedWorktrees] = useState<Set<string>>(() => storedWorktreeCollapsed(machineId, snapshot?.workspaces.flatMap((workspace) => workspace.worktree ? [workspace.worktree.repo_key] : []) ?? []));
+  const [collapsedWorktrees, setCollapsedWorktrees] = useState<Set<string>>(() => storedCollapsed((key) => worktreeCollapsedKey(machineId, key), snapshot?.workspaces.flatMap((workspace) => workspace.worktree ? [workspace.worktree.repo_key] : []) ?? []));
+  const [collapsedTabs, setCollapsedTabs] = useState<Set<string>>(() => storedCollapsed((id) => tabsCollapsedKey(machineId, id), snapshot?.workspaces.map((workspace) => workspace.workspace_id) ?? []));
+  // the workspaces whose stored fold was read, once each
+  const tabFoldsRead = useRef(new Set<string>(snapshot?.workspaces.map((workspace) => workspace.workspace_id) ?? []));
+  // a fold slides (lib/foldMotion.ts): where everything is drawn is read before React renders the
+  // fold, and the rows move on from there once it has. The keyboard's folds do not move.
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const foldCapture = useRef<{ capture: FoldCapture; motion: FoldMotion } | null>(null);
+  const [instantFold, setInstantFold] = useState(false);
   // the pane each workspace was last seen on in this browser: its row keeps showing and opening
   // that one, also after the page reloads (lib/lastViewedPane.ts). Kept once per pane opened, not
   // per snapshot, and a workspace opened again on the same pane becomes the newest seen again.
@@ -234,6 +245,57 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     } catch {}
   };
 
+  const setTabsCollapsed = (workspaceIds: string[], collapsed: boolean): void => {
+    setCollapsedTabs((current) => {
+      const next = new Set(current);
+      for (const id of workspaceIds) if (collapsed) next.add(id); else next.delete(id);
+      return next;
+    });
+    try {
+      for (const id of workspaceIds) {
+        if (collapsed) localStorage.setItem(tabsCollapsedKey(machineId, id), "1");
+        else localStorage.removeItem(tabsCollapsedKey(machineId, id));
+      }
+    } catch {}
+  };
+
+  /**
+   * A row's fold, or with Alt every row's: in focus mode what hangs under it, its tab rows and its
+   * worktrees; otherwise a repository's worktrees. A pointer's fold slides, the keyboard's does not.
+   */
+  const foldRows = (group: WorkspaceGroup<WorkspaceInfo>, collapsed: boolean, every: boolean, pointer: boolean): void => {
+    const root = workspaceRoot.current;
+    const motion: FoldMotion = !pointer ? "none" : reducedMotion ? "fade" : "slide";
+    if (root) foldCapture.current = { capture: captureFold(root), motion };
+    setInstantFold(motion !== "slide");
+    const groups = every ? worktreeGroups : [group];
+    if (tabsUnder) setTabsCollapsed(groups.flatMap(({ workspace, children }) => [workspace, ...(every ? children : [])].map((candidate) => candidate.workspace_id)), collapsed);
+    for (const { workspace, children } of groups) {
+      if (workspace.worktree && children.length > 0) setWorktreeCollapsed(workspace.worktree.repo_key, collapsed);
+    }
+  };
+  // A pointer's fold keeps the keyboard where it was, in the terminal most often. The row's press
+  // takes the focus (cancelling it would stop the row's drag), and its click gives it back.
+  const focusBeforePress = useRef<Element | null>(null);
+  const giveFocusBack = (): void => {
+    const before = focusBeforePress.current;
+    focusBeforePress.current = null;
+    if (before instanceof HTMLElement && before.isConnected && !workspaceRoot.current?.contains(before)) before.focus({ preventScroll: true });
+  };
+  useLayoutEffect(() => {
+    const pending = foldCapture.current;
+    const root = workspaceRoot.current;
+    if (!pending || !root) return;
+    foldCapture.current = null;
+    // the keyboard in a row that folded away goes to the row it hangs from
+    const gone = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>("[data-fold][hidden]") : null;
+    if (gone) {
+      const above = [...root.querySelectorAll<HTMLElement>(".workspace-select")].filter((row) => !row.closest("[hidden]") && (row.compareDocumentPosition(gone) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+      above.at(-1)?.focus({ preventScroll: true });
+    }
+    playFold(root, pending.capture, pending.motion);
+  });
+
   useEffect(() => {
     if (inlineError === null) return;
     const timer = window.setTimeout(() => setInlineError(null), ERROR_NOTE_MS);
@@ -250,9 +312,14 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     // New worktree groups bring their stored fold state after reconnecting or creating a workspace.
     setCollapsedWorktrees((current) => {
       const keys = snapshot.workspaces.flatMap((workspace) => workspace.worktree && !current.has(workspace.worktree.repo_key) ? [workspace.worktree.repo_key] : []);
-      const stored = storedWorktreeCollapsed(machineId, keys);
+      const stored = storedCollapsed((key) => worktreeCollapsedKey(machineId, key), keys);
       return stored.size === 0 ? current : new Set([...current, ...stored]);
     });
+    // and new workspaces their tabs' fold
+    const unread = snapshot.workspaces.map((workspace) => workspace.workspace_id).filter((id) => !tabFoldsRead.current.has(id));
+    for (const id of unread) tabFoldsRead.current.add(id);
+    const storedTabs = storedCollapsed((id) => tabsCollapsedKey(machineId, id), unread);
+    if (storedTabs.size > 0) setCollapsedTabs((current) => new Set([...current, ...storedTabs]));
   }, [snapshot, machineId]);
 
   const orderedWorkspaces = useMemo(() => {
@@ -594,7 +661,7 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     moveVisible(workspaceId, event.key === "ArrowUp" ? -1 : 1);
   };
 
-  const renderWorkspaceRow = (workspace: WorkspaceInfo, children: WorkspaceInfo[] = [], nested = false, drop?: "before" | "after") => {
+  const renderWorkspaceRow = (workspace: WorkspaceInfo, children: WorkspaceInfo[] = [], nested = false, drop?: "before" | "after", hidden = false) => {
     const panes = roster.filter((pane) => pane.workspace_id === workspace.workspace_id);
     if (panes.length === 0) return null;
     const pane = currentPane(workspace, panes);
@@ -615,26 +682,40 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
     // the tooltip and the menu keep the exact branch (its slashes) even where the row does not repeat it
     const branchNote = branchTitle && branchTitle !== workspace.label ? branchTitle : null;
     const paths = [...new Set([workspace.worktree?.checkout_path, pane.cwd].filter((path): path is string => Boolean(path)))];
-    const collapsed = children.length > 0 && repoKey !== undefined && collapsedWorktrees.has(repoKey);
+    const worktreesFolded = children.length > 0 && repoKey !== undefined && collapsedWorktrees.has(repoKey);
+    const tabsFolded = tabsUnder && collapsedTabs.has(workspace.workspace_id);
+    // focus mode folds everything under the row at once, its tab rows and its worktrees
+    const collapsed = tabsUnder ? tabsFolded && (children.length === 0 || worktreesFolded) : worktreesFolded;
     // a folded group's parent stands for its worktrees too, as herdr's collapsed parent does:
     // a checkout that waits or has finished must not hide behind the fold
-    const foldedPanes = collapsed ? children.flatMap((child) => roster.filter((candidate) => candidate.workspace_id === child.workspace_id)) : [];
+    const foldedPanes = worktreesFolded ? children.flatMap((child) => roster.filter((candidate) => candidate.workspace_id === child.workspace_id)) : [];
     // in focus mode a workspace's own tabs say their states under it: the row says only what its fold hides
-    const statusPanes = tabsUnder ? foldedPanes : [...panes, ...foldedPanes];
+    const statusPanes = tabsUnder ? [...(tabsFolded ? panes : []), ...foldedPanes] : [...panes, ...foldedPanes];
     // on two lines the row says what its pane is doing, and the workspace it has named until now sits under that
     const lines = twoLine ? taskRowLines({ paneTitle: displayPaneTitle(pane), labelled: Boolean(pane.label?.trim()), folder: cwdBasename(pane.cwd), workspace: rowTitle, alias: secondaryBranch }) : null;
-    // a folded group still shows the checkout that is open; the count is of the ones put away
-    const foldedCount = collapsed ? children.filter((child) => !roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)).length : 0;
+    // a folded group still shows the checkout that is open; the count is of the ones put away, its
+    // folded tab rows with them
+    const foldedCount = (worktreesFolded ? children.filter((child) => !roster.some((candidate) => candidate.workspace_id === child.workspace_id && candidate.pane_id === selectedPaneId)).length : 0)
+      + (tabsFolded ? snapshot?.tabs.filter((tab) => tab.workspace_id === workspace.workspace_id).length ?? 0 : 0);
     const editingWorkspace = editingWorkspaceId === workspace.workspace_id;
     const fixed = fixedIds.has(workspace.workspace_id);
     const menuOpen = menu?.workspace.workspace_id === workspace.workspace_id;
     const contentsId = `${rosterId}-worktrees-${encodeURIComponent(workspace.workspace_id)}`;
-    // a row with linked worktrees under it folds them from the chevron that leads it
-    const folds = !nested && children.length > 0 && repoKey !== undefined;
+    const tabsId = `${rosterId}-tabs-${encodeURIComponent(workspace.workspace_id)}`;
+    const controls = [tabsUnder ? tabsId : null, children.length > 0 ? contentsId : null].filter(Boolean).join(" ") || undefined;
+    // a row with linked worktrees under it folds them from the chevron that leads it; in focus mode
+    // every row leads with one, and the row itself folds too
+    const folds = tabsUnder || (!nested && children.length > 0 && repoKey !== undefined);
+    const fold = (next: boolean, every: boolean, pointer: boolean): void => foldRows({ workspace, children }, next, every, pointer);
+    const foldLabel = tabsUnder
+      ? t(collapsed ? "Expand {name}" : "Collapse {name}", { name: workspace.label })
+      : t(collapsed ? "Expand worktrees of {name}" : "Collapse worktrees of {name}", { name: workspace.label });
     const toggleMenu = (anchor: HTMLElement, point?: { x: number; y: number }, previousFocus?: HTMLElement | null): void => setMenu(menuOpen ? null : { anchor, point, previousFocus, workspace, title: rowTitle, place: [branchNote, ...paths].filter(Boolean).join(" · ") || workspace.label });
     return <li
-      className={`workspace workspace-group pane-item${selected ? " is-selected" : ""}${collapsed ? " is-collapsed" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}`}
+      className={`workspace workspace-group pane-item${selected ? " is-selected" : ""}${collapsed ? " is-collapsed" : ""}${tabsFolded ? " is-tabs-folded" : ""}${dragWorkspaceId === workspace.workspace_id ? " is-dragging" : ""}${touchDrag?.source === workspace.workspace_id ? " is-lifted" : ""}`}
       key={workspace.workspace_id}
+      hidden={hidden || undefined}
+      data-fold={nested ? "" : undefined}
       data-workspace={workspace.workspace_id}
       data-branch={branchTitle ?? undefined}
       data-drop={drop}
@@ -649,12 +730,15 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
         {folds && <button
           type="button"
           className="sidebar-row-action workspace-toggle"
-          aria-label={collapsed ? t("Expand worktrees of {name}", { name: workspace.label }) : t("Collapse worktrees of {name}", { name: workspace.label })}
-          title={collapsed ? t("Expand worktrees of {name}", { name: workspace.label }) : t("Collapse worktrees of {name}", { name: workspace.label })}
+          aria-label={foldLabel}
+          title={`${foldLabel} · ${t("Alt-click: all")}`}
           aria-expanded={!collapsed}
-          aria-controls={contentsId}
-          onClick={() => setWorktreeCollapsed(repoKey, !collapsed)}
-        ><span className="sidebar-mark" aria-hidden="true">{collapsed ? <ChevronRight /> : <ChevronDown />}</span></button>}
+          aria-controls={controls}
+          // in focus mode the row is the keyboard's way to the fold; a click keeps the focus where it is
+          tabIndex={tabsUnder ? -1 : undefined}
+          onMouseDown={(event) => { if (tabsUnder && event.button === 0) event.preventDefault(); }}
+          onClick={(event) => fold(!collapsed, event.altKey, event.detail > 0)}
+        ><span className="sidebar-mark" aria-hidden="true"><ChevronDown /></span></button>}
         <div
           className="pane-select workspace-select"
           role="button"
@@ -666,14 +750,27 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
           aria-description={fixed ? undefined : `${t("Reorder workspace {name}", { name: workspace.label })} · ${t("Drag to reorder · Alt+↑/↓")}`}
           data-pane={pane.pane_id}
           aria-current={selected ? "true" : undefined}
+          aria-expanded={tabsUnder ? !collapsed : undefined}
+          aria-controls={tabsUnder ? controls : undefined}
           title={[`${pane.pane_id} — ${rowTitle}`, branchNote, ...paths, paneTitle(pane), agentsTitle(workspace)].filter(Boolean).join(" — ")}
-          onClick={() => actions.selectPane(pane.pane_id)}
+          // focus mode: the row folds what hangs under it, and its tab rows open the panes
+          onMouseDown={(event) => { if (tabsUnder && event.button === 0) focusBeforePress.current = document.activeElement; }}
+          onClick={(event) => {
+            if (!tabsUnder) { actions.selectPane(pane.pane_id); return; }
+            fold(!collapsed, event.altKey, event.detail > 0);
+            if (event.detail > 0) giveFocusBack();
+          }}
           onKeyDown={(event) => {
             onRowKeyDown(event, workspace.workspace_id);
             if (event.defaultPrevented) return;
+            if (tabsUnder && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+              event.preventDefault();
+              if ((event.key === "ArrowLeft") !== collapsed) fold(event.key === "ArrowLeft", false, false);
+              return;
+            }
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
-            actions.selectPane(pane.pane_id);
+            if (tabsUnder) fold(!collapsed, false, false); else actions.selectPane(pane.pane_id);
           }}
         >
           {editingWorkspace ? <input
@@ -729,14 +826,16 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
           })}
         ><Plus aria-hidden="true" /></button>}
       </div>
-      {tabsUnder && snapshot && <WorkspaceTabs snapshot={snapshot} workspace={workspace} panes={panes} selectedPaneId={selectedPaneId} online={online} actions={actions} noteError={noteError} rows={tabRows} />}
+      {tabsUnder && snapshot && <WorkspaceTabs id={tabsId} folded={tabsFolded} snapshot={snapshot} workspace={workspace} panes={panes} selectedPaneId={selectedPaneId} online={online} actions={actions} noteError={noteError} rows={tabRows} />}
       {inlineError?.workspaceId === workspace.workspace_id && <p className="sidebar-inline-error" role="alert">{inlineError.message}{inlineError.detail !== null && <><br /><code>{inlineError.detail}</code></>}</p>}
     </li>;
   };
 
   /** a top-level row, and a repository's worktrees indented under it */
   const renderGroup = ({ workspace, children }: WorkspaceGroup<WorkspaceInfo>) => {
-    const childrenHidden = collapsedWorktrees.has(workspace.worktree?.repo_key ?? "") && !children.some((child) => roster.some((pane) => pane.workspace_id === child.workspace_id && pane.pane_id === selectedPaneId));
+    const folded = collapsedWorktrees.has(workspace.worktree?.repo_key ?? "");
+    const open = (child: WorkspaceInfo): boolean => roster.some((pane) => pane.workspace_id === child.workspace_id && pane.pane_id === selectedPaneId);
+    const childrenHidden = folded && !children.some(open);
     // a group moved below this one lands after its worktrees, and the line says so
     const afterChildren = dropMark?.id === workspace.workspace_id && dropMark.children;
     return <Fragment key={workspace.workspace_id}>
@@ -745,15 +844,17 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
         className="worktree-children"
         id={`${rosterId}-worktrees-${encodeURIComponent(workspace.workspace_id)}`}
         hidden={childrenHidden}
+        data-fold=""
         data-drop={afterChildren && !childrenHidden ? "after" : undefined}
       ><ul className="workspace-list">
-        {children.filter((child) => !collapsedWorktrees.has(workspace.worktree!.repo_key) || roster.some((pane) => pane.workspace_id === child.workspace_id && pane.pane_id === selectedPaneId)).map((child) => renderWorkspaceRow(child, [], true, dropMark?.id === child.workspace_id ? dropMark.side : undefined))}
+        {/* the folded ones stay in the list, hidden, so that they can slide away and back */}
+        {children.map((child) => renderWorkspaceRow(child, [], true, dropMark?.id === child.workspace_id ? dropMark.side : undefined, folded && !open(child)))}
       </ul></li>}
     </Fragment>;
   };
 
   return (
-    <div className={`machine-workspaces${twoLine ? " is-two-line" : ""}${tabsUnder ? " is-focus" : ""}${tabRows.drag ? " is-tab-dragging" : ""}`} ref={workspaceRoot}>
+    <div className={`machine-workspaces${twoLine ? " is-two-line" : ""}${tabsUnder ? " is-focus" : ""}${tabRows.drag ? " is-tab-dragging" : ""}${instantFold ? " is-fold-instant" : ""}`} ref={workspaceRoot}>
       <nav className="sidebar-list" aria-label={t("Herdr workspaces")}>
         <>
           <p className={loadingWords === null ? "visually-hidden" : "tree-state"} role="status">{loadingWords}</p>
@@ -788,6 +889,10 @@ export function Sidebar({ snapshot, online, selectedPaneId, actions }: SidebarPr
 }
 
 interface WorkspaceTabsProps {
+  /** the list's id, which its workspace row's fold controls */
+  id: string;
+  /** folded under the workspace's row: the rows stay, hidden (lib/foldMotion.ts) */
+  folded: boolean;
   snapshot: SessionSnapshot;
   workspace: WorkspaceInfo;
   /** the workspace's panes on the roster (lib/dagPane.ts) */
@@ -808,7 +913,7 @@ interface WorkspaceTabsProps {
  * F2 names a tab and Delete closes it. A drag moves a row, and so do Alt+↑/↓ and the menu; a moved
  * row stands in its new place while herdr makes the move.
  */
-function WorkspaceTabs({ snapshot, workspace, panes, selectedPaneId, online, actions, noteError, rows }: WorkspaceTabsProps) {
+function WorkspaceTabs({ id, folded, snapshot, workspace, panes, selectedPaneId, online, actions, noteError, rows }: WorkspaceTabsProps) {
   const t = useT();
   const machineId = useMachineId();
   const activity = useSidebarActivity();
@@ -974,7 +1079,7 @@ function WorkspaceTabs({ snapshot, workspace, panes, selectedPaneId, online, act
 
   return (
     <>
-      <ul ref={list} className="workspace-tabs" data-workspace={workspace.workspace_id} aria-label={t("Tabs of {workspace}", { workspace: workspace.label })} aria-busy={rows.moving} onKeyDown={onKeyDown}
+      <ul ref={list} id={id} hidden={folded} data-fold="" className="workspace-tabs" data-workspace={workspace.workspace_id} aria-label={t("Tabs of {workspace}", { workspace: workspace.label })} aria-busy={rows.moving} onKeyDown={onKeyDown}
         data-vacated={rows.drag?.away && rows.drag.workspaceId === workspace.workspace_id ? t("New shell") : undefined}>
         {tabs.map((tab, index) => {
           const own = panesOf(tab);

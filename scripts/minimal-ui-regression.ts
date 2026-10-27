@@ -44,9 +44,10 @@ try {
   }, created.root_pane.pane_id);
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${server.port}/`);
-  await page.locator(`.workspace-group[data-workspace="${workspaceId}"] .workspace-select`).click();
   const tabs = page.locator(".app-header .header-tabs [role=tab]");
   const rows = page.locator(`.workspace-group[data-workspace="${workspaceId}"] .workspace-tab-select`);
+  // in focus mode a workspace's row folds its tabs: its tab rows open the panes
+  await rows.first().click();
   const mod = process.platform === "darwin" ? "Meta" : "Control";
   await rows.nth(1).waitFor({ timeout: 20_000 });
   assert.equal(await tabs.count(), 0, "focus mode is on by default: no pills in the bar");
@@ -145,6 +146,26 @@ try {
   await page.keyboard.press("Alt+ArrowUp");
   await ordered(before);
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-tab-id")), before[0], "the moved row keeps the focus");
+  // a click on the workspace's row folds its tab rows under it: they slide away, the row says how
+  // many it holds, and the terminal keeps the keyboard; by key the fold is at once
+  const workspaceRow = page.locator(`.workspace-group[data-workspace="${workspaceId}"] > .workspace-header > .workspace-select`);
+  const tabList = page.locator(`.workspace-group[data-workspace="${workspaceId}"] > .workspace-tabs`);
+  const typing = () => page.evaluate(() => document.activeElement?.classList.contains("terminal-ime") === true);
+  await page.locator(".pane-frame[data-layout-pane]:not(.is-hidden) .terminal-ime").first().focus();
+  await workspaceRow.click();
+  assert.equal(await page.evaluate(() => document.getAnimations().some((animation) => (animation.effect as KeyframeEffect | null)?.target instanceof Element && ((animation.effect as KeyframeEffect).target as Element).matches(".workspace-tab"))), true, "a click's fold slides");
+  await tabList.waitFor({ state: "hidden", timeout: 5_000 });
+  assert.equal(await workspaceRow.getAttribute("aria-expanded"), "false", "the row says it is folded");
+  assert.equal(await workspaceRow.locator(".workspace-fold-count").textContent(), "+2", "the folded row says how many tabs it holds");
+  assert.equal(await typing(), true, "a click on the row leaves typing in the terminal");
+  await workspaceRow.focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await tabList.isVisible(), true, "→ unfolds at once");
+  assert.equal(await page.evaluate(() => document.getAnimations().filter((animation) => (animation.effect as KeyframeEffect | null)?.target instanceof Element && ((animation.effect as KeyframeEffect).target as Element).matches(".workspace-tab")).length), 0, "a fold by key does not move");
+  await page.keyboard.press("ArrowLeft");
+  assert.equal(await tabList.isHidden(), true, "← folds at once");
+  await page.keyboard.press("Enter");
+  await rows.nth(1).waitFor({ timeout: 5_000 });
   // a hidden sidebar hands the tabs back to the bar, and showing it takes them again
   await page.keyboard.press(`${mod}+b`);
   await tabs.nth(1).waitFor({ timeout: 5_000 });

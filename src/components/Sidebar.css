@@ -181,7 +181,8 @@
   width: var(--hairline);
 }
 
-.worktree-children .workspace-group:last-child > .workspace-header::before { bottom: 50%; }
+/* the last shown one: folded worktrees stay in the list, hidden (lib/foldMotion.ts) */
+.worktree-children .workspace-group:not(:has(~ .workspace-group:not([hidden]))) > .workspace-header::before { bottom: 50%; }
 
 .worktree-children .workspace-group > .workspace-header::after {
   top: 50%;
@@ -190,7 +191,8 @@
 }
 
 /* A workspace row with linked worktrees under it leads with their fold: a chevron, down while the
-   worktrees show and right while they are folded. */
+   worktrees show and right while they are folded. In focus mode every row leads with one, which
+   folds its tab rows and its worktrees together (Sidebar.tsx foldRows). */
 .sidebar-row-action.workspace-toggle {
   position: relative;
   flex: 0 0 var(--side-box);
@@ -203,19 +205,40 @@
 
 .workspace-toggle .sidebar-mark { flex-basis: auto; width: auto; }
 
+/* it turns as the rows slide, on their clock and curve (lib/foldMotion.ts); a fold by key turns at once */
 .sidebar-row-action.workspace-toggle svg {
   width: var(--icon-size);
   height: var(--icon-size);
+  transition: transform var(--dur-fold) var(--ease-spring);
 }
 
-/* how many worktrees a folded group holds */
+.workspace-group.is-collapsed > .workspace-header > .workspace-toggle svg { transform: rotate(-90deg); }
+
+.machine-workspaces.is-fold-instant .workspace-toggle svg { transition: none; }
+
+/* in focus mode a chevron on every row reads quieter than the names; the row folds too, so
+   hovering it lights the chevron */
+.machine-workspaces.is-focus .sidebar-row-action.workspace-toggle { color: var(--text-dim); }
+
+@media (hover: hover) and (pointer: fine) {
+  .machine-workspaces.is-focus .workspace-header:hover > .workspace-toggle { color: var(--text-strong); }
+}
+
+/* how many worktrees, and in focus mode tab rows, a folded row holds: it fades in as they go */
 .workspace-fold-count {
   flex: none;
   color: var(--text-dim);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   line-height: var(--lh-tight);
+  transition: opacity var(--dur-fast) ease;
 }
+
+@starting-style {
+  .workspace-fold-count { opacity: 0; }
+}
+
+.machine-workspaces.is-fold-instant .workspace-fold-count { transition: none; }
 
 /* hover first, selection after it: one neutral fill at two strengths */
 @media (hover: hover) {
@@ -632,9 +655,9 @@
 .worktree-children .workspace-tabs { padding-left: var(--side-box); }
 
 /* a worktree with more under it: the repository's branch runs on past its tabs */
-.worktree-children .workspace-group:not(:last-child) > .workspace-tabs { position: relative; }
+.worktree-children .workspace-group:has(~ .workspace-group:not([hidden])) > .workspace-tabs { position: relative; }
 
-.worktree-children .workspace-group:not(:last-child) > .workspace-tabs::before {
+.worktree-children .workspace-group:has(~ .workspace-group:not([hidden])) > .workspace-tabs::before {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -817,11 +840,26 @@
   font-size: var(--fs-sm);
 }
 
-/* the open tab's row is the filled one; its workspace's name says where it is */
-.machine-workspaces.is-focus .workspace-group.is-selected > .workspace-header { background: transparent; }
+/* the open tab's row is the filled one; its workspace's name says where it is. Folded away, the
+   tab hands the fill back to its workspace's row. */
+.machine-workspaces.is-focus .workspace-group.is-selected:not(.is-tabs-folded) > .workspace-header { background: transparent; }
 
 @media (hover: hover) {
-  .machine-workspaces.is-focus .workspace-group.is-selected > .workspace-header:hover { background: var(--side-hover); }
+  .machine-workspaces.is-focus .workspace-group.is-selected:not(.is-tabs-folded) > .workspace-header:hover { background: var(--side-hover); }
+}
+
+/* what a folded row's status cell says gives way to the + that takes the cell; touch, which
+   always shows the +, has the state step left of it */
+.machine-workspaces.is-focus .workspace-header:focus-within > .workspace-select > .sidebar-pane-meta { opacity: 0; }
+
+@media (hover: hover) and (pointer: fine) {
+  .machine-workspaces.is-focus .workspace-header:hover > .workspace-select > .sidebar-pane-meta { opacity: 0; }
+}
+
+@media (hover: none) {
+  .machine-workspaces.is-focus .workspace-header { padding-right: calc(2 * var(--side-box)); }
+  .machine-workspaces.is-focus .workspace-select > .sidebar-pane-meta { right: var(--side-box); }
+  .machine-workspaces.is-focus .workspace-header:focus-within > .workspace-select > .sidebar-pane-meta { opacity: 1; }
 }
 
 /* The workspace row's + (a new terminal), where the bar over the pane had it: it takes the status
@@ -864,6 +902,8 @@
   @starting-style {
     .workspace-tab.is-new { transform: none; }
   }
+
+  .sidebar-row-action.workspace-toggle svg { transition: none; }
 
   .workspace-new-tab:active:not(:disabled) { transform: none; }
 
