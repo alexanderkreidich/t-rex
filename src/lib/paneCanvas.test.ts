@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cardPlace, layoutTopology, paneContextPress, soloPane, splitPath, splitRatioAt, swappedCells, swapPending, type PaneSwap } from "./paneCanvas.ts";
+import { cardPlace, layoutTopology, paneContextPress, soloPane, splitAsk, splitCells, splitPath, splitPending, splitRatioAt, swappedCells, swapPending, type PaneSwap } from "./paneCanvas.ts";
 import type { PaneLayoutSnapshot } from "../../shared/protocol.ts";
 
 const layout: PaneLayoutSnapshot = {
@@ -85,5 +85,41 @@ describe("pane cards", () => {
     expect(swapPending([left], swap, "w1:t1")).toBe(false);
     expect(swapPending([left, right], swap, "w1:t2")).toBe(false);
     expect(swapPending([left, right], null, "w1:t1")).toBe(false);
+  });
+});
+
+describe("a split drawn before herdr's layout has it", () => {
+  it("halves the pane as herdr does, the odd column going to the pane it splits", () => {
+    expect(splitAsk(layout, "w1:p1", "right")).toEqual({
+      tabId: "w1:t1", paneId: "w1:p1", direction: "right",
+      cell: { left: 0, top: 0, width: 50, height: 100 },
+      kept: { left: 0, top: 0, width: 25, height: 100 },
+      made: { left: 25, top: 0, width: 25, height: 100 },
+    });
+    const narrow = { ...layout, panes: [{ pane_id: "w1:p1", focused: true, rect: { x: 130, y: 1, width: 15, height: 40 } }] };
+    const ask = splitAsk(narrow, "w1:p1", "right")!;
+    expect(ask.kept.width * 1.2).toBeCloseTo(8);
+    expect(ask.made.left * 1.2).toBeCloseTo(113);
+    expect(ask.made.width * 1.2).toBeCloseTo(7);
+    expect(splitAsk(layout, "w1:p1", "down")).toMatchObject({
+      kept: { left: 0, top: 0, width: 50, height: 50 }, made: { left: 0, top: 50, width: 50, height: 50 },
+    });
+  });
+
+  it("asks nothing of a pane the layout lacks, or one a column wide", () => {
+    expect(splitAsk(layout, "w1:p9", "right")).toBeNull();
+    expect(splitAsk({ ...layout, panes: [{ pane_id: "w1:p1", focused: true, rect: { x: 25, y: 1, width: 1, height: 40 } }] }, "w1:p1", "right")).toBeNull();
+  });
+
+  it("draws the kept half until herdr's layout moves the pane, then herdr's cells", () => {
+    const ask = splitAsk(layout, "w1:p1", "right")!;
+    const asked = [{ paneId: "w1:p1", focused: true, ...ask.cell }];
+    expect(splitPending(asked, ask, "w1:t1")).toBe(true);
+    expect(splitCells(asked, ask, "w1:t1")).toEqual([{ paneId: "w1:p1", focused: true, ...ask.kept }]);
+    const landed = [{ paneId: "w1:p1", focused: true, ...ask.kept }, { paneId: "w1:p2", focused: false, ...ask.made }];
+    expect(splitPending(landed, ask, "w1:t1")).toBe(false);
+    expect(splitCells(landed, ask, "w1:t1")).toEqual(landed);
+    expect(splitPending(asked, ask, "w1:t2")).toBe(false);
+    expect(splitPending(asked, null, "w1:t1")).toBe(false);
   });
 });

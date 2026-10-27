@@ -2030,9 +2030,11 @@ The values are the ones in `src/styles.css`.
   opened it (`--dur-base`). A tab that arrives while its workspace is open grows in. From `769px`
   the sidebar slides in and out (`--dur-modal` on `--ease-spring`); the pane column takes its new
   width once. A fold in the sidebar slides what it hides up under its row (`--dur-fold`,
-  `lib/foldMotion.ts`, transform and opacity only); a fold by key changes at once. Nothing a
-  shortcut opens or toggles animates (`data-key-action`, `lib/shortcuts.ts`). Rules for new
-  motion: AGENTS.md, UX and motion.
+  `lib/foldMotion.ts`, transform and opacity only); a fold by key changes at once. A split from a
+  pane card is drawn at the click: the pane takes its half at once and the new pane's place grows
+  in from the split side (`--dur-base`), and herdr's card for it takes that place, mid-growth if
+  need be, when its layout comes. Nothing a shortcut opens or toggles animates
+  (`data-key-action`, `lib/shortcuts.ts`). Rules for new motion: AGENTS.md, UX and motion.
 - `prefers-reduced-motion: reduce` removes pulses, drawer/control transitions, sheet rise and drop,
   smooth chat scrolling and settings toggle motion; a drag still follows the finger. State remains legible without animation.
   One exception: the sidebar's RUN dot keeps its stepped breath, opacity only and nothing moving,

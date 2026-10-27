@@ -9,7 +9,7 @@ import { PaneCachedContext, PanePresentedContext, PaneShownContext, PaneSubmitCo
 import { cachedPaneCells, visitPaneTab } from "../lib/paneTabCache.ts";
 import { routeMissing } from "../lib/api.ts";
 import { layoutCells, zoomMode } from "../lib/layoutMap.ts";
-import { cardPlace, layoutTopology, paneContextPress, paneFieldTarget, SOLO_PANE_QUERY, soloPane, splitPath, splitRatioAt, swappedCells, swapPending, type PaneSwap } from "../lib/paneCanvas.ts";
+import { cardPlace, layoutTopology, paneContextPress, paneFieldTarget, SOLO_PANE_QUERY, soloPane, splitAsk, splitCells, splitPath, splitPending, splitRatioAt, swappedCells, swapPending, type PaneSplitAsk, type PaneSwap } from "../lib/paneCanvas.ts";
 import { folderName } from "../lib/paneName.ts";
 import { customTabLabel } from "../lib/tabName.ts";
 import { useT } from "../lib/i18n.ts";
@@ -29,6 +29,8 @@ type PaneLayoutSplit = PaneLayoutSnapshot["splits"][number];
 const SORT_START_PX = 4;
 /** how long a dropped pair is drawn traded without herdr's layout saying so */
 const SWAP_WAIT_MS = 5000;
+/** how long a split's halves are drawn without herdr's layout saying so */
+const SPLIT_WAIT_MS = 5000;
 
 /** A motion token of src/styles.css, for an animation run from script (the Web Animations API). */
 const token = (name: string): string => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -53,6 +55,21 @@ function playMove(frame: HTMLElement, from: string, layer: string, duration: num
   const lower = (): void => { if (lastMove.get(frame) === move) frame.style.zIndex = ""; };
   move.onfinish = lower;
   move.oncancel = lower;
+}
+
+/**
+ * The new pane of a split growing in from the side it split from, `elapsed` ms into it: its place
+ * drawn at the click starts the growth, and herdr's card for the pane plays the rest of it there.
+ */
+function growIn(frame: HTMLElement, direction: "right" | "down", elapsed: number): void {
+  const duration = tokenMs("--dur-base");
+  if (elapsed >= duration) return;
+  const origin = direction === "right" ? "left center" : "center top";
+  const growth = frame.animate(reducedMotion()
+    ? [{ opacity: 0 }, { opacity: 1 }]
+    : [{ opacity: 0, transform: "scale(0.97)", transformOrigin: origin }, { opacity: 1, transform: "none", transformOrigin: origin }],
+  { duration, easing: token("--ease-out") });
+  growth.currentTime = elapsed;
 }
 
 /** A card held by its title: it rides the pointer until it is dropped on another pane of the tab, or let go. */
@@ -150,8 +167,12 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   // the cards' places before a change the canvas plays (FLIP): each moves from there once drawn
   const flip = useRef<{ before: Map<string, DOMRect>; dropped: string | null } | null>(null);
   // a split asked for from this canvas (a card's button, its menu): the pane it makes grows in from
-  // the side it split from. One made by a shortcut, the palette or herdr itself just appears
-  const splitting = useRef<{ tabId: string; direction: "right" | "down" } | null>(null);
+  // the side it split from. One made by a shortcut, the palette or herdr itself just appears.
+  // `grown` is when that growth began on the new pane's place, drawn at the click (`ask`): herdr's
+  // card for the pane plays the rest of it there
+  const splitting = useRef<{ tabId: string; direction: "right" | "down"; grown: number | null } | null>(null);
+  // the halves herdr's layout will have, drawn at the click, before that layout reaches the browser
+  const [ask, setAsk] = useState<PaneSplitAsk | null>(null);
   const seenPanes = useRef<{ tabId: string | undefined; ids: ReadonlySet<string> } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const fail = (reason: unknown): void => {
@@ -202,9 +223,13 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const split = async (target: HerdrPane, direction: "right" | "down"): Promise<void> => {
     const tabId = latest.current.tabId;
     const selection = latest.current.selection;
-    splitting.current = { tabId: target.tab_id, direction };
+    splitting.current = { tabId: target.tab_id, direction, grown: null };
+    // where both halves are drawn, they are drawn now, in herdr's own proportions
+    const halves = layout && !layout.zoomed && !narrow && !swapShown && !ask ? splitAsk(layout, target.pane_id, direction) : null;
+    if (halves) setAsk(halves);
     const made = await api.splitPane(target.pane_id, direction, true).catch((reason: unknown) => {
       splitting.current = null;
+      setAsk((current) => current === halves ? null : current);
       throw reason;
     });
     if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(made.pane_id);
@@ -276,11 +301,14 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   };
   const laid = layout ? layoutCells(layout) : pane ? [{ paneId: pane.pane_id, left: 0, top: 0, width: 100, height: 100, focused: true }] : [];
   const swapShown = swapPending(laid, swap, layout?.tab_id);
-  const cells = swappedCells(laid, swap, layout?.tab_id);
+  const splitShown = splitPending(laid, ask, layout?.tab_id);
+  const cells = splitCells(swappedCells(laid, swap, layout?.tab_id), ask, layout?.tab_id);
+  // the split's new pane is one of the cards before herdr's layout lists it
+  const cardCount = cells.length + (splitShown ? 1 : 0);
   const alone = soloPane(layout, cells.map((cell) => cell.paneId), selectedPaneId, narrow);
   const stacked = alone !== null && !layout?.zoomed;
   // a tab's panes trade places by their titles where they are drawn side by side, with a mouse
-  const sortable = !coarse && alone === null && cells.length > 1 && !swapShown;
+  const sortable = !coarse && alone === null && cells.length > 1 && !swapShown && !splitShown;
 
   const measure = (): Map<string, DOMRect> => {
     const boxes = new Map<string, DOMRect>();
@@ -300,9 +328,18 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     }, SWAP_WAIT_MS);
     return () => clearTimeout(timer);
   }, [swap]);
+  // herdr's layout has the split (or moved on): its own cells are drawn from here
+  useEffect(() => { if (ask && !splitShown) setAsk(null); }, [ask, splitShown]);
+  // no layout with the split from herdr: the pane takes its whole cell again
+  useEffect(() => {
+    if (!ask) return;
+    const timer = setTimeout(() => setAsk(null), SPLIT_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [ask]);
   // The canvas's motion, played once the new places are drawn and before they are painted. A move
   // animates transform alone: each card is laid out at its new place once (one pty resize) and plays
-  // from where it was. A pane that joins the tab on screen grows in from the side it split from.
+  // from where it was. A pane that joins the tab on screen grows in from the side it split from,
+  // from its place drawn at the click when there was one.
   useLayoutEffect(() => {
     const host = canvas.current;
     const moved = flip.current;
@@ -330,17 +367,19 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
     seenPanes.current = { tabId: presented?.tab_id, ids };
     const asked = splitting.current;
     if (asked && asked.tabId !== presented?.tab_id) splitting.current = null;
+    const place = host?.querySelector<HTMLElement>(".pane-frame.is-asked");
+    if (place && asked && asked.grown === null) {
+      asked.grown = performance.now();
+      growIn(place, asked.direction, 0);
+    }
     if (!host || !seen || seen.tabId !== presented?.tab_id || !asked || asked.tabId !== presented?.tab_id) return;
     const joined = [...ids].find((id) => !seen.ids.has(id));
     if (joined === undefined) return;
     // the split's pane has come: the direction is spent, also where the tab shows one pane alone
     splitting.current = null;
     if (alone !== null) return;
-    const origin = asked.direction === "right" ? "left center" : "center top";
-    host.querySelector<HTMLElement>(`[data-layout-pane="${CSS.escape(joined)}"]`)?.animate(still
-      ? [{ opacity: 0 }, { opacity: 1 }]
-      : [{ opacity: 0, transform: "scale(0.97)", transformOrigin: origin }, { opacity: 1, transform: "none", transformOrigin: origin }],
-    { duration: tokenMs("--dur-base"), easing: token("--ease-out") });
+    const frame = host.querySelector<HTMLElement>(`[data-layout-pane="${CSS.escape(joined)}"]`);
+    if (frame) growIn(frame, asked.direction, asked.grown === null ? 0 : performance.now() - asked.grown);
   });
 
   const startSort = (event: PointerEvent<HTMLDivElement>, item: HerdrPane): void => {
@@ -457,7 +496,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   // a card says what runs in it: a lone pane by its tab's name, as the sidebar's row does, each of a
   // split's panes by its own title; then the folder it works in, unless the title already says it
   const cardName = (item: HerdrPane): string => {
-    if (cells.length !== 1) return displayPaneTitle(item);
+    if (cardCount !== 1) return displayPaneTitle(item);
     const tabs = snapshot?.tabs.filter((tab) => tab.workspace_id === item.workspace_id) ?? [];
     const place = tabs.findIndex((tab) => tab.tab_id === item.tab_id);
     return (place < 0 ? null : customTabLabel(tabs[place]!, place + 1)) ?? displayPaneTitle(item);
@@ -479,7 +518,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
       const offTab = cell.retained || cell.cached;
       const active = !offTab && item.pane_id === selectedPaneId;
       const hidden = offTab || (alone !== null && alone !== item.pane_id);
-      const single = offTab ? cell.width === 100 && cell.height === 100 : cells.length === 1 || alone === item.pane_id;
+      const single = offTab ? cell.width === 100 && cell.height === 100 : cardCount === 1 || alone === item.pane_id;
       const zoomed = layout !== null && zoomMode(layout, item.pane_id) === "off";
       const zoomLabel = t(zoomed ? "Unzoom pane" : "Zoom pane");
       const folder = cardFolder(item);
@@ -548,7 +587,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
           <div className="pane-frame-actions">
             <button type="button" className="icon-button" aria-label={t("Split right")} title={t("Split right")} onClick={() => run(() => split(item, "right"))}><Columns2 aria-hidden="true" /></button>
             <button type="button" className="icon-button" aria-label={t("Split down")} title={t("Split down")} onClick={() => run(() => split(item, "down"))}><Rows2 aria-hidden="true" /></button>
-            <button type="button" className="icon-button" aria-label={zoomLabel} title={zoomLabel} aria-pressed={zoomed} disabled={!zoomed && cells.length < 2} onClick={() => zoom(item)}>
+            <button type="button" className="icon-button" aria-label={zoomLabel} title={zoomLabel} aria-pressed={zoomed} disabled={!zoomed && cardCount < 2} onClick={() => zoom(item)}>
               {zoomed ? <Minimize2 aria-hidden="true" /> : <Maximize2 aria-hidden="true" />}
             </button>
             <button type="button" className="icon-button" aria-label={t("Close pane")} title={t("Close pane")} onClick={() => requestClose(item)}><X aria-hidden="true" /></button>
@@ -559,6 +598,11 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         <div className="pane-frame-body"><PaneCachedContext.Provider value={cell.cached && !cell.retained}><PanePresentedContext.Provider value={!offTab}><PaneShownContext.Provider value={!hidden}>{renderPane(item, active)}</PaneShownContext.Provider></PanePresentedContext.Provider></PaneCachedContext.Provider></div>
       </section>;
     })}
+    {/* the split's new pane, drawn at the click: herdr's card for it takes this place when its layout comes */}
+    {splitShown && <div className="pane-frame is-asked" aria-hidden="true" style={cardPlace(ask.made)}>
+      <div className="pane-frame-head" />
+      <div className="pane-frame-body" />
+    </div>}
     {alone === null && layout?.splits.map((item) => {
       const vertical = item.direction === "right";
       const path = splitPath(item.id);
