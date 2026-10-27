@@ -1015,10 +1015,11 @@ function WorkspaceTabs({ id, folded, snapshot, workspace, panes, selectedPaneId,
     const besidePane = beside ? paneFor(beside) : undefined;
     const ownIds = panesOf(tab).map((pane) => pane.pane_id);
     const hadFocus = list.current?.contains(document.activeElement) === true;
+    // the open tab goes at once, its terminal with it: the tab beside it opens before herdr answers
+    if (besidePane && selected.current !== null && ownIds.includes(selected.current)) actions.selectPane(besidePane.pane_id);
     await closeTab(tab.tab_id);
     // the last tab took its workspace, and these rows, with it: focus goes where a closed row's goes
     if (!beside) { if (hadFocus) focusWorkspaceListToggle(); return; }
-    if (besidePane && selected.current !== null && ownIds.includes(selected.current)) actions.selectPane(besidePane.pane_id);
     if (hadFocus) focusRow(beside.tab_id);
   };
   const requestClose = (tab: HerdrTab): void => {

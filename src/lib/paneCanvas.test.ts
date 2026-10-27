@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cardPlace, layoutTopology, paneContextPress, soloPane, splitAsk, splitCells, splitPath, splitPending, splitRatioAt, swappedCells, swapPending, type PaneSwap } from "./paneCanvas.ts";
+import { cardPlace, closeAsk, closedCells, closePending, layoutTopology, paneContextPress, soloPane, splitAsk, splitCells, splitPath, splitPending, splitRatioAt, swappedCells, swapPending, type PaneSwap } from "./paneCanvas.ts";
 import type { PaneLayoutSnapshot } from "../../shared/protocol.ts";
 
 const layout: PaneLayoutSnapshot = {
@@ -121,5 +121,54 @@ describe("a split drawn before herdr's layout has it", () => {
     expect(splitCells(landed, ask, "w1:t1")).toEqual(landed);
     expect(splitPending(asked, ask, "w1:t2")).toBe(false);
     expect(splitPending(asked, null, "w1:t1")).toBe(false);
+  });
+});
+
+describe("a close drawn before herdr's layout has it", () => {
+  // the root split right; its right half split down: p1 | p2 over p3
+  const three: PaneLayoutSnapshot = {
+    ...layout, area: { x: 0, y: 0, width: 120, height: 40 },
+    panes: [
+      { pane_id: "w1:p1", focused: false, rect: { x: 0, y: 0, width: 60, height: 40 } },
+      { pane_id: "w1:p2", focused: true, rect: { x: 60, y: 0, width: 60, height: 20 } },
+      { pane_id: "w1:p3", focused: false, rect: { x: 60, y: 20, width: 60, height: 20 } },
+    ],
+    splits: [
+      { id: "split_0_root", direction: "right", ratio: 0.5, rect: { x: 0, y: 0, width: 120, height: 40 } },
+      { id: "split_1_1", direction: "down", ratio: 0.5, rect: { x: 60, y: 0, width: 60, height: 40 } },
+    ],
+  };
+
+  it("gives a closed pane's half to the other half of its split", () => {
+    const below = closeAsk(three, "w1:p3")!;
+    expect(below.heir).toBe("w1:p2");
+    expect(below.cells.get("w1:p2")).toEqual({ left: 50, top: 0, width: 50, height: 100 });
+    expect(below.cells.get("w1:p1")).toEqual({ left: 0, top: 0, width: 50, height: 100 });
+  });
+
+  it("stretches every pane of the other half across the whole split", () => {
+    const left = closeAsk(three, "w1:p1")!;
+    expect(left.heir).toBe("w1:p2");
+    expect(left.cells.get("w1:p2")).toEqual({ left: 0, top: 0, width: 100, height: 50 });
+    expect(left.cells.get("w1:p3")).toEqual({ left: 0, top: 50, width: 100, height: 50 });
+  });
+
+  it("asks nothing of a pane alone in its tab", () => {
+    const alone = { ...three, panes: [{ ...three.panes[0]!, rect: { x: 0, y: 0, width: 120, height: 40 } }], splits: [] };
+    expect(closeAsk(alone, "w1:p1")).toBeNull();
+    expect(closeAsk(three, "w1:p9")).toBeNull();
+  });
+
+  it("draws the pane gone until herdr's layout drops it, then herdr's cells", () => {
+    const ask = closeAsk(three, "w1:p3")!;
+    const before = [{ paneId: "w1:p1", left: 0, top: 0, width: 50, height: 100 }, { paneId: "w1:p2", left: 50, top: 0, width: 50, height: 50 }, { paneId: "w1:p3", ...ask.cell }];
+    expect(closePending(before, ask, "w1:t1")).toBe(true);
+    expect(closedCells(before, ask, "w1:t1")).toEqual([
+      { paneId: "w1:p1", left: 0, top: 0, width: 50, height: 100 }, { paneId: "w1:p2", left: 50, top: 0, width: 50, height: 100 },
+    ]);
+    const landed = before.slice(0, 2).map((cell) => ({ ...cell, ...ask.cells.get(cell.paneId) }));
+    expect(closePending(landed, ask, "w1:t1")).toBe(false);
+    expect(closedCells(landed, ask, "w1:t1")).toEqual(landed);
+    expect(closePending(before, ask, "w1:t2")).toBe(false);
   });
 });

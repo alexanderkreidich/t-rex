@@ -166,3 +166,76 @@ export function splitCells<T extends PaneBox & { paneId: string }>(cells: readon
   if (!splitPending(cells, ask, tabId)) return [...cells];
   return cells.map((cell) => cell.paneId === ask.paneId ? { ...cell, ...ask.kept } : cell);
 }
+
+/** A pane closed from its card, drawn gone before herdr's layout says so: the places its neighbours take. */
+export interface PaneCloseAsk {
+  tabId: string;
+  paneId: string;
+  /** the pane's cell when it was closed: herdr's layout keeps it there until the close lands */
+  cell: PaneBox;
+  /** the other panes' places once it is gone: the half it leaves goes to the other half of its split */
+  cells: ReadonlyMap<string, PaneBox>;
+  /** the pane that takes its place, the first of that other half */
+  heir: string;
+}
+
+type Rect = PaneLayoutSnapshot["panes"][number]["rect"];
+const within = (outer: Rect, inner: Rect): boolean => inner.x >= outer.x && inner.y >= outer.y
+  && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+
+/**
+ * The layout herdr makes of a tab when a pane closes: the split it was a half of gives its whole
+ * rect to the other half, whose panes stretch across it along the split. Null for a pane that is
+ * alone in its tab (the tab closes with it) or not one whole half of a split.
+ */
+export function closeAsk(layout: PaneLayoutSnapshot, paneId: string): PaneCloseAsk | null {
+  const pane = layout.panes.find((item) => item.pane_id === paneId);
+  if (!pane) return null;
+  const { rect } = pane;
+  // its split is the smallest one around it
+  const split = layout.splits.filter((item) => within(item.rect, rect))
+    .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height)[0];
+  if (!split) return null;
+  const across = split.direction === "right";
+  const whole = split.rect;
+  const first = across ? rect.x === whole.x : rect.y === whole.y;
+  const fills = across ? rect.y === whole.y && rect.height === whole.height && (first || rect.x + rect.width === whole.x + whole.width)
+    : rect.x === whole.x && rect.width === whole.width && (first || rect.y + rect.height === whole.y + whole.height);
+  if (!fills) return null;
+  const other: Rect = across
+    ? { x: first ? whole.x + rect.width : whole.x, y: whole.y, width: whole.width - rect.width, height: whole.height }
+    : { x: whole.x, y: first ? whole.y + rect.height : whole.y, width: whole.width, height: whole.height - rect.height };
+  const stretch = (r: Rect): Rect => across
+    ? { ...r, x: whole.x + (r.x - other.x) * whole.width / other.width, width: r.width * whole.width / other.width }
+    : { ...r, y: whole.y + (r.y - other.y) * whole.height / other.height, height: r.height * whole.height / other.height };
+  const { area } = layout;
+  const box = (r: Rect): PaneBox => ({
+    left: ((r.x - area.x) / Math.max(1, area.width)) * 100,
+    top: ((r.y - area.y) / Math.max(1, area.height)) * 100,
+    width: (r.width / Math.max(1, area.width)) * 100,
+    height: (r.height / Math.max(1, area.height)) * 100,
+  });
+  const rest = layout.panes.filter((item) => item.pane_id !== paneId);
+  const heirs = rest.filter((item) => within(other, item.rect)).sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+  if (heirs.length === 0) return null;
+  return {
+    tabId: layout.tab_id, paneId, cell: box(rect), heir: heirs[0]!.pane_id,
+    cells: new Map(rest.map((item) => [item.pane_id, box(within(other, item.rect) ? stretch(item.rect) : item.rect)])),
+  };
+}
+
+/** Whether herdr's layout still has the closed pane where the close found it: until then the canvas draws it gone. */
+export function closePending(cells: readonly (PaneBox & { paneId: string })[], ask: PaneCloseAsk | null, tabId: string | undefined): ask is PaneCloseAsk {
+  if (!ask || ask.tabId !== tabId) return false;
+  const cell = cells.find((item) => item.paneId === ask.paneId);
+  return !!cell && sameBox(cell, ask.cell);
+}
+
+/** The cells with a pending close's pane gone and its neighbours in the places they take. */
+export function closedCells<T extends PaneBox & { paneId: string }>(cells: readonly T[], ask: PaneCloseAsk | null, tabId: string | undefined): T[] {
+  if (!closePending(cells, ask, tabId)) return [...cells];
+  return cells.filter((cell) => cell.paneId !== ask.paneId).map((cell) => {
+    const place = ask.cells.get(cell.paneId);
+    return place ? { ...cell, ...place } : cell;
+  });
+}
