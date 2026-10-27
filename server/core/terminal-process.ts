@@ -4,7 +4,7 @@
  * take-over a user asks for, and the new terminal a live handoff moves the pane to.
  */
 import type { HerdrPane, ServerMessage } from "../../shared/protocol.ts";
-import { AttachOutputTail, AttachStartupProbes, isTakeoverExit } from "../attach-output.ts";
+import { AttachOutputTail, AttachStartupProbes, isTakeoverExit, mayBeRefusal } from "../attach-output.ts";
 import { HerdrError, herdrSocketPath, paneRead, paneSendText, sessionSnapshot } from "../herdr/client.ts";
 import { MirrorSession } from "../mirror.ts";
 import { PtySession } from "../pty/session.ts";
@@ -29,7 +29,7 @@ const ATTACH_HELD_RE = /terminal attach failed: [^\r\n]*(?:already has an attach
 export const ATTACH_RETRY_FOR_MS = 20_000;
 const ATTACH_RETRY_MS = 50;
 const ATTACH_RETRY_MAX_MS = 500;
-/** a refused attach says so within milliseconds of its first bytes: those are held this long */
+/** a refused attach says so within milliseconds of its first bytes: those that may be one are held this long */
 export const ATTACH_HOLD_MS = 100;
 /**
  * What `herdr terminal attach` writes itself before herdr has answered, and as the teardown of a
@@ -259,14 +259,16 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
       takeover = null;
       trying = true;
       let output = ""; // this attach's own last words: herdr's refusal is in them
-      // its first bytes wait ATTACH_HOLD_MS: a refusal (herdr's setup, teardown and message)
-      // is dropped then, never painted into the clients' terminal
+      // its first bytes wait ATTACH_HOLD_MS while they may be a refusal (herdr's setup, teardown
+      // and message), dropped then, never painted into the clients' terminal; a screen goes at once
       let held: string | null = "";
       let heldSince = 0;
       let holding = false;
       let holdTimer: ReturnType<typeof setTimeout> | undefined;
       const probes = new AttachStartupProbes();
       const outputTail = new AttachOutputTail();
+      // the grid the pty starts with: a resize after it reaches the pane a moment later, through herdr
+      const spawned = { cols: attachment.cols, rows: attachment.rows };
       let tailTimer: ReturnType<typeof setTimeout> | undefined;
       const flushTail = (exited = false): void => {
         clearTimeout(tailTimer);
@@ -443,11 +445,17 @@ export function createSpawnAttachment({ attachments, retiringAttachments, termin
           output = (output + data).slice(-1024);
           if (held === null) return publish(data);
           held += data;
-          if (!holding && !ATTACH_PREAMBLE_RE.test(held)) {
+          if (ATTACH_PREAMBLE_RE.test(held)) return;
+          if (!holding) {
             holding = true;
             heldSince = Date.now();
             holdTimer = setTimeout(took, holdFor);
           }
+          // the screen has begun, which no refusal does: nothing is left to wait for, unless another
+          // bridge had the pane a moment ago and may take it back before this attach settles, or
+          // the pty was resized since it started and the shell may not have its grid yet
+          const resized = attachment.cols !== spawned.cols || attachment.rows !== spawned.rows;
+          if (!attachment.held && !resized && !mayBeRefusal(held)) took();
         },
         onExit: ended,
       });

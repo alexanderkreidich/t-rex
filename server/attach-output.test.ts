@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { AttachOutputTail, AttachStartupProbes } from "./attach-output.ts";
+import { AttachOutputTail, AttachStartupProbes, mayBeRefusal } from "./attach-output.ts";
 
 const teardown = "\x1b[?1049l\x1b[?25h\x1b[0 q";
 const diagnostic = "herdr: server shut down: terminal attach taken over\r\n";
@@ -70,4 +70,15 @@ it("returns a held start that never became a probe", () => {
   const probes = new AttachStartupProbes();
   expect(probes.take("\x1b[?1049h\x1b[?10", (text) => PREAMBLE.test(text))).toEqual({ output: "\x1b[?1049h", replies: "" });
   expect(probes.flush() + probes.flush()).toBe("\x1b[?10");
+});
+
+it("tells a screen from a refusal by the first output past the attach's setup", () => {
+  const setup = "\x1b[?1049h\x1b[?25l\x1b[2 q";
+  for (const refusal of ["herdr: terminal attach failed: terminal term_1 already has an attached client", "herdr: terminal", "h", ""]) {
+    expect(mayBeRefusal(setup + refusal)).toBe(true);
+    expect(mayBeRefusal(setup + teardown + refusal)).toBe(true);
+  }
+  for (const screen of ["\x1b[H\x1b[2Jbash-3.2$ ", "\x1b[?2026h\x1b[1;1H$ ", "bash-3.2$ ", "hello"]) {
+    expect(mayBeRefusal(setup + screen)).toBe(false);
+  }
 });
