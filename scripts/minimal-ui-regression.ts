@@ -7,8 +7,9 @@
  * sidebar hidden with Mod+B hands them back to the bar. A row dropped on another workspace's name
  * goes there, its shell still running; a workspace's last tab leaves a new shell behind it.
  * The top row's + makes a workspace at once, a shell in the PC's home, with no dialog.
- * Each pane is a rounded card whose title bar carries Split right, Split down, Zoom and Close; a
- * card dragged by its title onto another of its tab trades places with it in herdr. Mod+D from the
+ * Each pane is a rounded card whose title bar carries Split right, Split down, Zoom and Close (a
+ * split from there is drawn at the click, before herdr's layout); a card dragged by its title onto
+ * another of its tab trades places with it in herdr. Mod+D from the
  * terminal splits its pane right.
  *
  *   bun run build && bun run check run bun scripts/minimal-ui-regression.ts
@@ -184,8 +185,17 @@ try {
   assert.deepEqual(await actions.evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
     ["Split right", "Split down", "Zoom pane", "Close pane"], "the title bar carries the pane's actions");
   assert.equal(await actions.nth(2).isDisabled(), true, "a lone pane has nothing to zoom");
-  // Split right from the title bar; then the left card, dragged by its title onto the right one, trades places with it in herdr
-  await card.getByRole("button", { name: "Split right" }).click();
+  // Split right from the title bar, its halves drawn at the click; then the left card, dragged by its
+  // title onto the right one, trades places with it in herdr
+  const drawn = await card.getByRole("button", { name: "Split right" }).evaluate(async (button) => {
+    const frame = button.closest<HTMLElement>(".pane-frame")!;
+    const whole = frame.getBoundingClientRect().width;
+    (button as HTMLElement).click();
+    // React draws a click's update in a microtask: no answer from the bridge can come before it
+    for (let i = 0; i < 3; i++) await Promise.resolve();
+    return { whole, kept: frame.getBoundingClientRect().width, asked: document.querySelector(".pane-frame.is-asked") !== null };
+  });
+  assert.ok(drawn.asked && drawn.kept < drawn.whole * 0.6, `the halves are drawn at the click: ${JSON.stringify(drawn)}`);
   const cards = page.locator(".pane-frame[data-layout-pane]:not(.is-hidden)");
   await cards.nth(1).waitFor({ timeout: 10_000 });
   const [left, right] = await cards.evaluateAll((frames) => frames.map((frame) => (frame as HTMLElement).dataset["layoutPane"]!));
@@ -195,6 +205,9 @@ try {
   };
   const split = await columns();
   assert.ok(split.get(left!)! < split.get(right!)!, "the new pane is on the right");
+  // the new pane's card is drawn when herdr answers the split, before its layout lists the pane:
+  // cards trade places by their titles once that layout has come
+  await page.locator(".pane-canvas.is-sortable").waitFor({ timeout: 10_000 });
   const title = (await cards.nth(0).locator(".pane-frame-head").boundingBox())!;
   const drop = (await cards.nth(1).boundingBox())!;
   await page.mouse.move(title.x + 40, title.y + title.height / 2);

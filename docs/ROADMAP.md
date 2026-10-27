@@ -60,7 +60,8 @@ The visible UI shrinks to a workspace list, one top bar of pill tabs and the ter
       down, Zoom and Close. The buttons show on the open pane and under the pointer. Drag a card by
       its title onto another card of its tab and the two swap places (herdr's `pane.swap`). They
       are drawn swapped at once and slide into place (FLIP, transform only). A split made from a
-      card grows in from its side. A phone keeps its edge-to-edge pane.
+      card is drawn at the click in herdr's proportions, its new pane growing in from its side;
+      herdr's card takes that place when its layout comes. A phone keeps its edge-to-edge pane.
 - [ ] Pane cards follow-ups: the browser's split view still draws a strip row per half under an
       empty bar; after a swap, Tab moves across the cards in pane order, not on-screen order (a
       section never moves in the document, so the terminal keeps the focus).

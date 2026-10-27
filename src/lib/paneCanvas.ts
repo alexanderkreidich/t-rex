@@ -115,3 +115,54 @@ export function swappedCells<T extends PaneBox & { paneId: string }>(cells: read
   return cells.map((cell) => cell.paneId === swap.a ? { ...cell, ...box(swap.cellB) }
     : cell.paneId === swap.b ? { ...cell, ...box(swap.cellA) } : cell);
 }
+
+/** A split asked for from a card, drawn before herdr's layout has it: the pane in the half it keeps, the new pane's place beside it. */
+export interface PaneSplitAsk {
+  tabId: string;
+  paneId: string;
+  direction: "right" | "down";
+  /** the pane's cell when the split was asked for: herdr's layout keeps it there until the split lands */
+  cell: PaneBox;
+  kept: PaneBox;
+  made: PaneBox;
+}
+
+/**
+ * The halves herdr's pane.split makes of a pane, in its own cells and rounding (15 columns keep 8
+ * and make 7): the pane keeps the first, the new pane takes the second. Null for a pane not in the
+ * layout, or one too small to halve.
+ */
+export function splitAsk(layout: PaneLayoutSnapshot, paneId: string, direction: "right" | "down"): PaneSplitAsk | null {
+  const pane = layout.panes.find((item) => item.pane_id === paneId);
+  if (!pane) return null;
+  const { area } = layout;
+  const box = (x: number, y: number, width: number, height: number): PaneBox => ({
+    left: ((x - area.x) / Math.max(1, area.width)) * 100,
+    top: ((y - area.y) / Math.max(1, area.height)) * 100,
+    width: (width / Math.max(1, area.width)) * 100,
+    height: (height / Math.max(1, area.height)) * 100,
+  });
+  const { x, y, width, height } = pane.rect;
+  const across = direction === "right";
+  const kept = Math.round((across ? width : height) / 2);
+  if (kept < 1 || (across ? width : height) - kept < 1) return null;
+  return {
+    tabId: layout.tab_id, paneId, direction,
+    cell: box(x, y, width, height),
+    kept: across ? box(x, y, kept, height) : box(x, y, width, kept),
+    made: across ? box(x + kept, y, width - kept, height) : box(x, y + kept, width, height - kept),
+  };
+}
+
+/** Whether herdr's layout still has the split pane where the split found it: until then the canvas draws the halves. */
+export function splitPending(cells: readonly (PaneBox & { paneId: string })[], ask: PaneSplitAsk | null, tabId: string | undefined): ask is PaneSplitAsk {
+  if (!ask || ask.tabId !== tabId) return false;
+  const cell = cells.find((item) => item.paneId === ask.paneId);
+  return !!cell && sameBox(cell, ask.cell);
+}
+
+/** The cells with a pending split's pane in the half it keeps; the new pane's place is the ask's `made`. */
+export function splitCells<T extends PaneBox & { paneId: string }>(cells: readonly T[], ask: PaneSplitAsk | null, tabId: string | undefined): T[] {
+  if (!splitPending(cells, ask, tabId)) return [...cells];
+  return cells.map((cell) => cell.paneId === ask.paneId ? { ...cell, ...ask.kept } : cell);
+}

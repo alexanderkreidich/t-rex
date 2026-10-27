@@ -92,7 +92,9 @@
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-card);
   }
-  .pane-frame.is-current:not(.is-single) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  /* the open pane, and a split's new pane before its own card comes (it opens there) */
+  .pane-frame.is-current:not(.is-single),
+  .pane-frame.is-asked { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
   /* the grid inset from the card's edges, under the title's mark: on the body, never on the
      terminal's mount, whose client size the fit reads (PaneTerminal.css) */
   .pane-frame-body { padding: 0 var(--space-3) var(--space-2); }
