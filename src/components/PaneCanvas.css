@@ -92,7 +92,7 @@
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-card);
   }
-  /* the open pane, and a split's new pane before herdr's card for it comes (it opens there) */
+  /* the open pane, and a split's new pane before its own card comes (it opens there) */
   .pane-frame.is-current:not(.is-single),
   .pane-frame.is-asked { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
   /* the grid inset from the card's edges, under the title's mark: on the body, never on the

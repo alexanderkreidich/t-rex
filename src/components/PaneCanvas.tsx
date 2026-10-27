@@ -59,7 +59,7 @@ function playMove(frame: HTMLElement, from: string, layer: string, duration: num
 
 /**
  * The new pane of a split growing in from the side it split from, `elapsed` ms into it: its place
- * drawn at the click starts the growth, and herdr's card for the pane plays the rest of it there.
+ * drawn at the click starts the growth, and the pane's own card plays the rest of it there.
  */
 function growIn(frame: HTMLElement, direction: "right" | "down", elapsed: number): void {
   const duration = tokenMs("--dur-base");
@@ -168,11 +168,12 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const flip = useRef<{ before: Map<string, DOMRect>; dropped: string | null } | null>(null);
   // a split asked for from this canvas (a card's button, its menu): the pane it makes grows in from
   // the side it split from. One made by a shortcut, the palette or herdr itself just appears.
-  // `grown` is when that growth began on the new pane's place, drawn at the click (`ask`): herdr's
-  // card for the pane plays the rest of it there
+  // `grown` is when that growth began on the new pane's place, drawn at the click (`ask`): the
+  // pane's own card plays the rest of it there
   const splitting = useRef<{ tabId: string; direction: "right" | "down"; grown: number | null } | null>(null);
-  // the halves herdr's layout will have, drawn at the click, before that layout reaches the browser
-  const [ask, setAsk] = useState<PaneSplitAsk | null>(null);
+  // the halves herdr's layout will have, drawn at the click, before that layout reaches the browser;
+  // `pane` is the split's new pane once herdr has answered with it
+  const [ask, setAsk] = useState<(PaneSplitAsk & { pane?: HerdrPane }) | null>(null);
   const seenPanes = useRef<{ tabId: string | undefined; ids: ReadonlySet<string> } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const fail = (reason: unknown): void => {
@@ -232,6 +233,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
       setAsk((current) => current === halves ? null : current);
       throw reason;
     });
+    setAsk((current) => halves && current === halves ? { ...halves, pane: made } : current);
     if (alive.current && latest.current.tabId === tabId && latest.current.selection === selection) onSelect(made.pane_id);
   };
   const zoom = (target: HerdrPane): void => run(async () => {
@@ -302,9 +304,12 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   const laid = layout ? layoutCells(layout) : pane ? [{ paneId: pane.pane_id, left: 0, top: 0, width: 100, height: 100, focused: true }] : [];
   const swapShown = swapPending(laid, swap, layout?.tab_id);
   const splitShown = splitPending(laid, ask, layout?.tab_id);
-  const cells = splitCells(swappedCells(laid, swap, layout?.tab_id), ask, layout?.tab_id);
+  // herdr has answered with the split's pane: its own card is drawn in its place and its terminal
+  // attaches now, before herdr's layout lists it; the same keyed card goes on from there
+  const madeCell = splitShown && ask.pane ? [{ paneId: ask.pane.pane_id, focused: false, ...ask.made }] : [];
+  const cells = [...splitCells(swappedCells(laid, swap, layout?.tab_id), ask, layout?.tab_id), ...madeCell];
   // the split's new pane is one of the cards before herdr's layout lists it
-  const cardCount = cells.length + (splitShown ? 1 : 0);
+  const cardCount = cells.length + (splitShown && !ask.pane ? 1 : 0);
   const alone = soloPane(layout, cells.map((cell) => cell.paneId), selectedPaneId, narrow);
   const stacked = alone !== null && !layout?.zoomed;
   // a tab's panes trade places by their titles where they are drawn side by side, with a mouse
@@ -513,7 +518,7 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
   return <PaneSubmitContext.Provider value={submits}><div className={`pane-canvas${!pane && presented ? " is-pending" : ""}${sortable ? " is-sortable" : ""}${sort ? " is-sorting" : ""}`} ref={canvas} aria-busy={!pane && presented ? true : undefined}>
     {cells.length === 0 && renderPane(pane, true)}
     {mountedCells.map((cell) => {
-      const item = snapshot?.panes.find((item) => item.pane_id === cell.paneId);
+      const item = snapshot?.panes.find((item) => item.pane_id === cell.paneId) ?? (cell.paneId === ask?.pane?.pane_id ? ask.pane : undefined);
       if (!item) return null;
       const offTab = cell.retained || cell.cached;
       const active = !offTab && item.pane_id === selectedPaneId;
@@ -598,8 +603,8 @@ export function PaneCanvas({ snapshot, pane, selectedPaneId, onSelect, onChanged
         <div className="pane-frame-body"><PaneCachedContext.Provider value={cell.cached && !cell.retained}><PanePresentedContext.Provider value={!offTab}><PaneShownContext.Provider value={!hidden}>{renderPane(item, active)}</PaneShownContext.Provider></PanePresentedContext.Provider></PaneCachedContext.Provider></div>
       </section>;
     })}
-    {/* the split's new pane, drawn at the click: herdr's card for it takes this place when its layout comes */}
-    {splitShown && <div className="pane-frame is-asked" aria-hidden="true" style={cardPlace(ask.made)}>
+    {/* the split's new pane, drawn at the click: its own card takes this place when herdr answers */}
+    {splitShown && !ask.pane && <div className="pane-frame is-asked" aria-hidden="true" style={cardPlace(ask.made)}>
       <div className="pane-frame-head" />
       <div className="pane-frame-body" />
     </div>}

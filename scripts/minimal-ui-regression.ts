@@ -205,6 +205,9 @@ try {
   };
   const split = await columns();
   assert.ok(split.get(left!)! < split.get(right!)!, "the new pane is on the right");
+  // the new pane's card is drawn when herdr answers the split, before its layout lists the pane:
+  // cards trade places by their titles once that layout has come
+  await page.locator(".pane-canvas.is-sortable").waitFor({ timeout: 10_000 });
   const title = (await cards.nth(0).locator(".pane-frame-head").boundingBox())!;
   const drop = (await cards.nth(1).boundingBox())!;
   await page.mouse.move(title.x + 40, title.y + title.height / 2);
