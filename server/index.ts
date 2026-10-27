@@ -457,7 +457,7 @@ export function createServer(
         }
       }
 
-      const paneResponse = await handlePaneRequest(request, url, pathname);
+      const paneResponse = await handlePaneRequest(request, url, pathname, broadcastAll);
       if (paneResponse) return paneResponse;
 
       if (pathname.startsWith("/api/")) {

@@ -266,8 +266,9 @@ export async function handleWorkspaceRequest(request: Request, url: URL, pathnam
         // no pane event follows a rename, so the clients are told here
         broadcastAll({ type: "session-changed" });
       } else {
-        // herdr emits pane.closed for the tab's panes, and the collector tells the clients
         await tabClose(payload.tab_id);
+        // herdr's pane.closed would tell the clients too, after the collector's debounce
+        broadcastAll({ type: "session-changed" });
       }
       return jsonResponse({ ok: true });
     } catch (error) {

@@ -291,3 +291,44 @@ describe("pane layout routes: herdr's layout changes", () => {
     expect((await layout()).panes.map((pane) => pane.pane_id).sort()).toEqual([root, right, below, nested].sort());
   });
 });
+
+describe("pane layout routes: every client hears of the change", () => {
+  /** the time from a route's answer to the next session-changed frame a client gets */
+  async function heard(route: string, body: unknown): Promise<number> {
+    const socket = new WebSocket(`ws://localhost:${server.port}/ws`);
+    const frames: { type: string; at: number }[] = [];
+    socket.addEventListener("message", (event) => frames.push({ ...(JSON.parse(String(event.data)) as { type: string }), at: performance.now() }));
+    /** herdr and the bridge are other processes: a bounded poll, never a fixed sleep */
+    const until = async (check: () => boolean, label: string): Promise<void> => {
+      const deadline = Date.now() + 5_000;
+      while (!check() && Date.now() < deadline) await Bun.sleep(10);
+      if (!check()) throw new Error(`Timed out: ${label}: ${JSON.stringify(frames.map((frame) => frame.type))}`);
+    };
+    try {
+      // the frames of what came before (the workspace's creation, debounced) are not this route's
+      await until(() => frames.some((frame) => frame.type === "session-changed"), "session-changed before the route");
+      const seen = frames.length;
+      const response = await post(route, body);
+      const answered = performance.now();
+      expect(response.status).toBe(200);
+      await until(() => frames.slice(seen).some((frame) => frame.type === "session-changed"), `session-changed after ${route}`);
+      return frames.slice(seen).find((frame) => frame.type === "session-changed")!.at - answered;
+    } finally {
+      socket.close();
+    }
+  }
+
+  it("pushes session-changed when a split or a close answers, not after herdr's event and the collector's debounce", async () => {
+    const own = await workspaceCreate({ cwd: tmpdir(), label: "t-rex-test-layout-push" });
+    try {
+      // no focus asked, as a split by key or from the palette: no pane.focused event says it either
+      const split = await post("split", { pane_id: own.root_pane.pane_id, direction: "right" });
+      const made = ((await split.json()) as PaneSplit).pane.pane_id;
+      // herdr's own event and the collector's half-second debounce took 525-735 ms
+      expect(await heard("split", { pane_id: own.root_pane.pane_id, direction: "down" })).toBeLessThan(250);
+      expect(await heard("close", { pane_id: made })).toBeLessThan(250);
+    } finally {
+      await workspaceClose(own.workspace.workspace_id).catch(() => undefined);
+    }
+  }, 20_000);
+});

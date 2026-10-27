@@ -1,10 +1,10 @@
 /**
  * The pane routes: what the browser reads from a pane (its screen, scroll, selection) and what
  * it does to one (type, rename, close, split, zoom, swap, resize, clear, focus, paste an image).
- * Each answers from herdr alone, so none needs the server's own state. The dispatcher in index.ts
- * runs the access gate first.
+ * Each answers from herdr alone, so none needs the server's own state; a layout change is told to
+ * every client through `broadcastAll`. The dispatcher in index.ts runs the access gate first.
  */
-import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
+import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource, ServerMessage } from "../shared/protocol.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject } from "./http.ts";
 import { agentRename, HerdrError, layoutSetSplitRatio, paneClear, paneClose, paneFind, paneFocus, paneRead, paneRename, paneResize, paneScroll, paneScrollInfo, paneSelectionRead, paneSendKeys, paneSendText, paneSplit, paneSwap, paneSwapWith, paneZoom } from "./herdr/client.ts";
 import { PasteImageError, readImageBody, savePaneImage } from "./paste.ts";
@@ -16,7 +16,7 @@ const READ_SOURCES = new Set<ReadSource>(["detection", "recent", "recent_unwrapp
 const READ_FORMATS = new Set<ReadFormat>(["ansi", "text"]);
 
 /** The answer for a pane route, or null when the path is not one. */
-export async function handlePaneRequest(request: Request, url: URL, pathname: string): Promise<Response | null> {
+export async function handlePaneRequest(request: Request, url: URL, pathname: string, broadcastAll: (message: ServerMessage) => void): Promise<Response | null> {
   if (pathname === "/api/pane/rename") {
     if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
     const payload = await readJsonObject<{ pane_id?: unknown; label?: unknown }>(request);
@@ -160,9 +160,10 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
     if (payload instanceof Response) return payload;
     if (typeof payload.pane_id !== "string" || !payload.pane_id.trim()) return badRequest("missing_pane_id", "pane_id is required");
     try {
-      // herdr emits pane.closed -> the collector broadcasts session-changed, so
-      // every client refetches and the pane leaves sidebars on its own
+      // every client reads the roster again now: the collector would say it only after herdr's
+      // pane.closed and its own debounce, and the closed pane's card would stay that long
       await paneClose(payload.pane_id);
+      broadcastAll({ type: "session-changed" });
       return jsonResponse({ ok: true });
     } catch (error) {
       return errorResponse(error);
@@ -184,9 +185,10 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
 
   // herdr's own layout operations, as its TUI has them: prefix+v and prefix+- (split), prefix+z
   // (zoom), prefix+shift+hjkl (swap), its resize mode, and pane clear. Each is one herdr RPC. No
-  // answer carries the layout: a new pane reaches every client through the collector's
-  // pane.created subscription and a moved border, zoom or swap through its layout.updated one,
-  // both as session-changed, the same way the TUI's own changes do.
+  // answer carries the layout: a change is told to every client as session-changed once herdr
+  // answers, as the workspace routes do. The collector's pane.created and layout.updated would
+  // say it too, but herdr sends an event up to 100 ms late (it polls its subscriptions) and the
+  // collector debounces it by half a second; the TUI's own changes still come that way.
   if (pathname === "/api/pane/split" || pathname === "/api/pane/zoom" || pathname === "/api/pane/swap" || pathname === "/api/pane/resize" || pathname === "/api/pane/clear" || pathname === "/api/pane/focus") {
     if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
     const payload = await readJsonObject<{ pane_id?: unknown; direction?: unknown; target_pane_id?: unknown; focus?: unknown; mode?: unknown; amount?: unknown }>(request);
@@ -202,11 +204,13 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         if (payload.direction !== "right" && payload.direction !== "down") return badRequest("invalid_direction", "direction must be right or down");
         if (payload.focus !== undefined && typeof payload.focus !== "boolean") return badRequest("invalid_focus", "focus must be a boolean");
         const pane = await paneSplit(paneId, payload.direction, payload.focus === true);
+        broadcastAll({ type: "session-changed" });
         return jsonResponse({ ok: true, pane } satisfies PaneSplit);
       }
       if (pathname === "/api/pane/zoom") {
         if (payload.mode !== undefined && payload.mode !== "toggle" && payload.mode !== "on" && payload.mode !== "off") return badRequest("invalid_mode", "mode must be toggle, on or off");
         const zoom = await paneZoom(paneId, payload.mode ?? "toggle");
+        if (zoom.changed) broadcastAll({ type: "session-changed" });
         return jsonResponse({ ok: true, zoomed: zoom.zoomed, changed: zoom.changed, reason: zoom.reason } satisfies PaneZoomed);
       }
       if (pathname === "/api/pane/clear") {
@@ -221,6 +225,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         const swap = typeof payload.target_pane_id === "string"
           ? await paneSwapWith(paneId, payload.target_pane_id)
           : await paneSwap(paneId, payload.direction as PaneDirection);
+        if (swap.changed) broadcastAll({ type: "session-changed" });
         return jsonResponse({ ok: true, changed: swap.changed, reason: swap.reason, target_pane_id: swap.target_pane_id } satisfies PaneSwapped);
       }
       if (!isPaneDirection(payload.direction)) return badRequest("invalid_direction", "direction must be left, right, up or down");
@@ -230,6 +235,7 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
         return badRequest("invalid_amount", "amount must be a number above 0 and at most 0.5");
       }
       const resize = await paneResize(paneId, payload.direction, payload.amount);
+      if (resize.changed) broadcastAll({ type: "session-changed" });
       return jsonResponse({ ok: true, changed: resize.changed, reason: resize.reason } satisfies PaneResized);
     } catch (error) {
       return errorResponse(error);
