@@ -1,7 +1,7 @@
 {
   "name": "t-rex",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "Your herdr sessions in a Ghostty-like terminal, in the browser and on your phone. Built like Superlogical's Rex, on the herdr multiplexer and restty.",
   "license": "MIT",
