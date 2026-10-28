@@ -6,6 +6,29 @@ installs update only to releases. Remote-PC runtime bundles are versioned separa
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-28
+
+### Added
+
+- Added collapsible workspace tabs in focus mode: click a workspace row to fold or unfold its
+  tabs. (#2)
+
+### Changed
+
+- Made pane splits visible at the click, with the new terminal attaching as soon as herdr
+  answers instead of waiting for the next workspace snapshot. (#6)
+- Made closing a pane or tab update the layout and select its neighbour immediately; a refused
+  pane close restores the card. (#7)
+- Reduced the delay before a freshly attached terminal shows its screen and accepts input,
+  while retaining the settling period for contested or recently resized terminals. (#5)
+
+### Fixed
+
+- Updated clients as soon as herdr answers a pane split, close or zoom, or a tab or workspace
+  close, without waiting for its next event. (#3)
+- Kept herdr's terminal-attach shutdown messages out of the pane's terminal when a pane closes,
+  its shell exits or the server stops. (#4)
+
 ## [1.0.0] - 2026-10-27
 
 The first official release of T-Rex, in a repository of its own: your herdr sessions in a
